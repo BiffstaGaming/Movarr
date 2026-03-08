@@ -191,7 +191,7 @@ $auto_refresh = isset($_GET['refresh']);
 
 <header>
   <a class="logo" href="index.php">
-    <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="16" fill="#E5A00D"/><path d="M11 8h4.5c3.6 0 6 2.2 6 5.5S19.1 19 15.5 19H14v5h-3V8zm3 8.5h1.3c1.9 0 3.1-1 3.1-3S17.2 10.5 15.3 10.5H14v6z" fill="#1a1a1a"/></svg>
+    <img src="images/movarr-logo.svg" width="32" height="32" alt="Movarr" style="border-radius:6px">
     <span>Movarr</span>
   </a>
   <nav>

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1f2b3e"/>
+      <stop offset="100%" style="stop-color:#141d2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd166"/>
+      <stop offset="100%" style="stop-color:#e08c00"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="200" height="200" rx="38" fill="url(#bg)"/>
+
+  <!-- File body — bright white/light so it pops on dark -->
+  <g filter="url(#glow)">
+    <path d="M58 34 L116 34 L144 62 L144 166 L58 166 Z"
+          fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linejoin="round"/>
+    <polyline points="116,34 116,62 144,62"
+              fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Bold amber arrow cutting through -->
+  <g filter="url(#glow)">
+    <line x1="38" y1="100" x2="144" y2="100"
+          stroke="url(#gold)" stroke-width="9" stroke-linecap="round"/>
+    <path d="M130 80 L160 100 L130 120 Z"
+          fill="url(#gold)"/>
+  </g>
+</svg>
