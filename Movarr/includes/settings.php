@@ -16,6 +16,7 @@ function settings_file(): string { return config_base() . '/settings.json'; }
 function trigger_file(): string  { return config_base() . '/.trigger'; }
 function log_file(): string      { return config_base() . '/mover.log'; }
 function queue_file(): string    { return config_base() . '/queue.json'; }
+function db_file(): string       { return config_base() . '/movarr.db'; }
 
 function load_settings(): array {
     $defaults = [
