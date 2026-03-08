@@ -2,8 +2,10 @@ FROM php:8.3-apache
 
 RUN a2enmod rewrite
 
-# Enable SQLite3 PDO driver (bundled with PHP, just needs activating)
-RUN docker-php-ext-install pdo_sqlite
+# Install SQLite3 system library then enable the PHP PDO driver
+RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && docker-php-ext-install pdo_sqlite
 
 COPY index.php   /var/www/html/index.php
 COPY config.php  /var/www/html/config.php
