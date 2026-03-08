@@ -15,6 +15,7 @@ function config_base(): string {
 function settings_file(): string { return config_base() . '/settings.json'; }
 function trigger_file(): string  { return config_base() . '/.trigger'; }
 function log_file(): string      { return config_base() . '/mover.log'; }
+function queue_file(): string    { return config_base() . '/queue.json'; }
 
 function load_settings(): array {
     $defaults = [
@@ -25,6 +26,10 @@ function load_settings(): array {
         'sonarr' => [
             'url'     => getenv('SONARR_URL') ?: '',
             'api_key' => getenv('SONARR_API_KEY') ?: '',
+        ],
+        'radarr' => [
+            'url'     => getenv('RADARR_URL') ?: '',
+            'api_key' => getenv('RADARR_API_KEY') ?: '',
         ],
         'watched_days'   => 30,
         'dry_run'        => true,

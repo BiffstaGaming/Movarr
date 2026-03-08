@@ -40,6 +40,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'url'     => trim($_POST['sonarr_url'] ?? ''),
                 'api_key' => trim($_POST['sonarr_api_key'] ?? ''),
             ],
+            'radarr' => [
+                'url'     => trim($_POST['radarr_url'] ?? ''),
+                'api_key' => trim($_POST['radarr_api_key'] ?? ''),
+            ],
             'watched_days'  => max(1, (int)($_POST['watched_days'] ?? 30)),
             'dry_run'       => isset($_POST['dry_run']),
             'list_only'     => isset($_POST['list_only']),
@@ -299,6 +303,7 @@ $s = load_settings();
   <nav>
     <a href="index.php">Dashboard</a>
     <a href="config.php" class="active">Config</a>
+    <a href="queue.php">Queue</a>
     <a href="logs.php">Logs</a>
   </nav>
 </header>
@@ -353,6 +358,29 @@ $s = load_settings();
         <div class="api-key-wrap">
           <input type="password" id="sonarr_api_key" name="sonarr_api_key" value="<?= htmlspecialchars($s['sonarr']['api_key']) ?>" placeholder="Settings → General → API Key">
           <button type="button" class="btn-eye" onclick="toggleKey('sonarr_api_key', this)" title="Show/hide">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Radarr ── -->
+  <div class="section">
+    <div class="section-header">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4h-4z"/></svg>
+      Radarr
+    </div>
+    <div class="section-body">
+      <div class="field-row">
+        <label>URL</label>
+        <input type="text" name="radarr_url" value="<?= htmlspecialchars($s['radarr']['url']) ?>" placeholder="http://vm-plex.home:7878">
+      </div>
+      <div class="field-row">
+        <label>API Key</label>
+        <div class="api-key-wrap">
+          <input type="password" id="radarr_api_key" name="radarr_api_key" value="<?= htmlspecialchars($s['radarr']['api_key']) ?>" placeholder="Settings → General → API Key">
+          <button type="button" class="btn-eye" onclick="toggleKey('radarr_api_key', this)" title="Show/hide">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
         </div>

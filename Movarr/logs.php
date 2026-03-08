@@ -197,6 +197,7 @@ $auto_refresh = isset($_GET['refresh']);
   <nav>
     <a href="index.php">Dashboard</a>
     <a href="config.php">Config</a>
+    <a href="queue.php">Queue</a>
     <a href="logs.php" class="active">Logs</a>
   </nav>
 </header>

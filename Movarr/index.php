@@ -55,7 +55,7 @@ if ($apiKey) {
         foreach ($records as $r) {
             $show = $r['grandparent_title'] ?? 'Unknown Show';
             if (!isset($tvShows[$show])) {
-                $tvShows[$show] = ['plays' => 0, 'users' => [], 'thumb' => $r['grandparent_thumb'] ?? '', 'last_watched' => 0];
+                $tvShows[$show] = ['plays' => 0, 'users' => [], 'rating_key' => $r['grandparent_rating_key'] ?? '', 'last_watched' => 0];
             }
             $tvShows[$show]['plays']++;
             $tvShows[$show]['users'][$r['user'] ?? 'Unknown'] = true;
@@ -240,6 +240,7 @@ function time_ago(int $ts): string
   <nav>
     <a href="index.php" class="active">Dashboard</a>
     <a href="config.php">Config</a>
+    <a href="queue.php">Queue</a>
     <a href="logs.php">Logs</a>
   </nav>
   <span class="date-label">Last <?= $days ?> days &mdash; <?= date('M j, Y') ?></span>
@@ -269,9 +270,9 @@ function time_ago(int $ts): string
       <div class="card-list">
         <?php foreach ($tvShows as $showTitle => $info): ?>
         <div class="card">
-          <?php if ($info['thumb']): ?>
+          <?php if ($info['rating_key']): ?>
             <img class="card-thumb"
-              src="<?= htmlspecialchars($tautulliUrl . '/api/v2?apikey=' . $apiKey . '&cmd=pms_image_proxy&img=' . urlencode($info['thumb']) . '&width=42&height=42') ?>"
+              src="<?= htmlspecialchars($tautulliUrl . '/api/v2?apikey=' . $apiKey . '&cmd=pms_image_proxy&rating_key=' . urlencode($info['rating_key']) . '&width=84&height=84&fallback=poster') ?>"
               alt="" loading="lazy"
               onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
             <div class="card-thumb-placeholder" style="display:none">&#128250;</div>
