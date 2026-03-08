@@ -255,7 +255,8 @@ def rsync_move(src: Path, dst: Path, dry_run: bool, log: logging.Logger) -> bool
 def process_mapping(mapping: dict, watched_tvdb_ids: set[int],
                     watched_titles: set[str],
                     all_series: list[dict], settings: dict,
-                    dry_run: bool, log: logging.Logger) -> None:
+                    dry_run: bool, list_only: bool,
+                    log: logging.Logger) -> None:
 
     name         = mapping.get('name', 'unnamed')
     slow_mover   = Path(mapping['slow_path_mover'])
@@ -302,15 +303,19 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set[int],
 
     log.info(f"  → Move to fast: {len(to_fast)}")
     for s in to_fast:
-        log.info(f"      {Path(s['path']).name}")
+        log.debug(f"      {Path(s['path']).name}")
 
     log.info(f"  ← Move to slow: {len(to_slow)}")
     for s in to_slow:
-        log.info(f"      {Path(s['path']).name}")
+        log.debug(f"      {Path(s['path']).name}")
 
-    log.info(f"  ? Watched but unmatched in Sonarr: {len(unmatched)}")
-    for name in sorted(unmatched):
-        log.debug(f"      {name}")
+    log.info(f"  ? Unmatched on slow (not in watched list): {len(unmatched)}")
+    for u in sorted(unmatched):
+        log.debug(f"      {u}")
+
+    if list_only:
+        log.info("  LIST ONLY — skipping rsync and Sonarr updates")
+        return
 
     def do_move(series: dict, src_base: Path, dst_base: Path,
                 new_sonarr_base: str) -> None:
@@ -355,9 +360,12 @@ def main() -> None:
         log.error(f"Failed to load settings: {exc}")
         sys.exit(1)
 
-    dry_run = settings.get('dry_run', True)
-    if dry_run:
-        log.info('DRY RUN MODE — no files will be moved or deleted')
+    dry_run   = settings.get('dry_run', True)
+    list_only = settings.get('list_only', False)
+    if list_only:
+        log.info('LIST ONLY MODE — decisions logged, no rsync or Sonarr updates')
+    elif dry_run:
+        log.info('DRY RUN MODE — rsync runs but no files will be moved or deleted')
 
     watched_tvdb_ids, watched_titles = get_watched(settings, log)
 
@@ -370,7 +378,7 @@ def main() -> None:
         if mapping.get('service') == 'sonarr':
             try:
                 process_mapping(mapping, watched_tvdb_ids, watched_titles,
-                                all_series, settings, dry_run, log)
+                                all_series, settings, dry_run, list_only, log)
             except Exception as exc:
                 log.error(f"Error in mapping '{mapping.get('name')}': {exc}",
                           exc_info=True)
