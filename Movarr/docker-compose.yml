@@ -1,0 +1,39 @@
+services:
+
+  # ── Web dashboard (PHP) ────────────────────────────────────────────────────
+  dashboard:
+    build: .
+    container_name: plex-dashboard
+    ports:
+      - "8080:80"
+    volumes:
+      - config_data:/config
+    environment:
+      CONFIG_PATH: /config
+      # Fallback env vars — used only if settings.json doesn't exist yet.
+      # Once you save settings via the Config page these are ignored.
+      TAUTULLI_URL: ${TAUTULLI_URL:-http://vm-plex.home:8181}
+      TAUTULLI_API_KEY: ${TAUTULLI_API_KEY:-}
+    restart: unless-stopped
+
+  # ── Mover (Python + rsync) ─────────────────────────────────────────────────
+  mover:
+    build: ./mover
+    container_name: plex-mover
+    volumes:
+      - config_data:/config
+      # ── Media volumes ──────────────────────────────────────────────────────
+      # Mount the same host paths that Sonarr uses so the mover can see them.
+      # The container paths here MUST match what you configure in the UI under
+      # "Mover Container Paths" for each path mapping.
+      #
+      # Example (edit to match your actual host paths):
+      # - /mnt/mediaStorage/tvshows:/TvMedia
+      # - /mnt/metadata-nvme/downloads:/downloads
+    environment:
+      CONFIG_PATH: /config
+    restart: unless-stopped
+
+# Shared named volume for settings.json, mover.log, and the trigger file
+volumes:
+  config_data:
