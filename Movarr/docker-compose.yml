@@ -3,7 +3,7 @@
     image: ghcr.io/biffstagaming/movarr-dashboard:latest
     container_name: movarr-dashboard
     ports:
-      - "8080:80"
+      - "${MOVARR_PORT:-8967}:80"
     volumes:
       - config_data:/config
     environment:
