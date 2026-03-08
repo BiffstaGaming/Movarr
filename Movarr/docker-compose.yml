@@ -1,6 +1,6 @@
-services:
+﻿services:
   movarr-dashboard:
-    image: ghcr.io/biffstag​aming/movarr-dashboard:latest
+    image: ghcr.io/biffstagaming/movarr-dashboard:latest
     container_name: movarr-dashboard
     ports:
       - "8080:80"
@@ -8,19 +8,18 @@ services:
       - config_data:/config
     environment:
       CONFIG_PATH: /config
-      # Fallback env vars — used only if settings.json doesn't exist yet.
+      # Fallback env vars used only if settings.json doesn't exist yet.
       # Once you save settings via the Config page these are ignored.
       TAUTULLI_URL: ${TAUTULLI_URL:-http://vm-plex.home:8181}
       TAUTULLI_API_KEY: ${TAUTULLI_API_KEY:-}
     restart: unless-stopped
 
-  # ── Mover (Python + rsync) ─────────────────────────────────────────────────
+  #Mover (Python + rsync)
   movarr-service:
-    image: ghcr.io/biffstag​aming/movarr-service:latest
+    image: ghcr.io/biffstagaming/movarr-service:latest
     container_name: movarr-service
     volumes:
       - config_data:/config
-      # ── Media volumes ──────────────────────────────────────────────────────
       # Mount the same host paths that Sonarr uses so the mover can see them.
       # The container paths here MUST match what you configure in the UI under
       # "Mover Container Paths" for each path mapping.
