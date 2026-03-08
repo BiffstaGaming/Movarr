@@ -10,128 +10,113 @@ if (file_exists($qf)) {
     if (is_array($raw)) $data = $raw;
 }
 
-$is_running = $data && $data['completed'] === null;
-
-$mode_labels = ['real' => 'Real', 'dry_run' => 'Dry Run', 'list_only' => 'List Only'];
-$mode_classes = ['real' => 'badge-red', 'dry_run' => 'badge-blue', 'list_only' => 'badge-muted'];
-
-$status_cfg = [
-    'pending' => ['label' => 'Pending',  'class' => 'badge-muted',  'dot' => 'dot-muted'],
-    'moving'  => ['label' => 'Moving',   'class' => 'badge-amber',  'dot' => 'dot-amber'],
-    'done'    => ['label' => 'Done',     'class' => 'badge-green',  'dot' => 'dot-green'],
-    'error'   => ['label' => 'Error',    'class' => 'badge-red',    'dot' => 'dot-red'],
-    'skipped' => ['label' => 'Skipped',  'class' => 'badge-muted',  'dot' => 'dot-muted'],
-];
-
-$counts = ['pending' => 0, 'moving' => 0, 'done' => 0, 'error' => 0, 'skipped' => 0];
+// Active = any item in pending or moving state
+$active_items = [];
 foreach (($data['items'] ?? []) as $item) {
-    $s = $item['status'] ?? 'pending';
-    if (isset($counts[$s])) $counts[$s]++;
+    $s = $item['status'] ?? '';
+    if ($s === 'pending' || $s === 'moving') {
+        $active_items[] = $item;
+    }
 }
 
-$extra_head = $is_running ? '<meta http-equiv="refresh" content="5">' : '';
+$is_running = !empty($active_items);
+$extra_head = $is_running ? '<meta http-equiv="refresh" content="3">' : '';
+
+$mode_labels  = ['real' => 'Real', 'dry_run' => 'Dry Run', 'list_only' => 'List Only'];
+$mode_classes = ['real' => 'badge-red', 'dry_run' => 'badge-blue', 'list_only' => 'badge-muted'];
+
 layout_start('Queue', 'queue', $extra_head);
 ?>
 
-<?php if (!$data): ?>
-  <div class="empty">
-    No queue data yet.<br>
-    <a href="config.php">Run the mover</a> to generate queue activity.
-  </div>
-<?php else: ?>
-
-  <!-- Run info bar -->
-  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;">
-    <?php if ($is_running): ?>
-      <span class="dot dot-amber"></span>
-      <strong>Run in progress</strong>
-    <?php else: ?>
-      <span class="dot dot-green"></span>
-      <strong>Run complete</strong>
-    <?php endif; ?>
-
-    <span class="text-muted" style="font-size:.8rem">
-      Started: <?= htmlspecialchars($data['started']) ?>
-      <?php if ($data['completed']): ?>
-        &mdash; Completed: <?= htmlspecialchars($data['completed']) ?>
-      <?php endif; ?>
-    </span>
-
-    <span class="badge <?= $mode_classes[$data['mode']] ?? 'badge-muted' ?>">
-      <?= htmlspecialchars($mode_labels[$data['mode']] ?? $data['mode']) ?>
-    </span>
-
-    <?php foreach ($counts as $key => $n): ?>
-      <?php if ($n > 0): ?>
-        <span class="badge <?= $status_cfg[$key]['class'] ?>">
-          <?= $n ?> <?= $status_cfg[$key]['label'] ?>
-        </span>
-      <?php endif; ?>
-    <?php endforeach; ?>
-
-    <?php if ($is_running): ?>
-      <span class="text-muted ml-auto" style="font-size:.75rem">Auto-refreshing every 5s</span>
-    <?php endif; ?>
-  </div>
-
-  <!-- Items table -->
-  <div class="card">
-    <?php if (empty($data['items'])): ?>
-      <div class="empty">No items queued — nothing to move this run.</div>
-    <?php else: ?>
-    <table>
-      <thead>
-        <tr>
-          <th></th>
-          <th>Title</th>
-          <th>Service</th>
-          <th>Direction</th>
-          <th>Mapping</th>
-          <th>Transfer</th>
-          <th>Started</th>
-          <th>Finished</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php foreach ($data['items'] as $item):
-          $status = $item['status'] ?? 'pending';
-          $cfg    = $status_cfg[$status] ?? $status_cfg['pending'];
-          $to_fast = ($item['direction'] ?? '') === 'to_fast';
-          $svc = $item['service'] ?? 'sonarr';
-        ?>
-        <tr>
-          <td style="width:24px">
-            <span class="dot <?= $cfg['dot'] ?>"></span>
-          </td>
-          <td>
-            <div style="font-weight:600;font-size:.875rem"><?= htmlspecialchars($item['name'] ?? '') ?></div>
-            <div style="font-size:.7rem;color:var(--muted);font-family:monospace;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              <?= htmlspecialchars($to_fast ? ($item['src'] ?? '') : ($item['dst'] ?? '')) ?>
-            </div>
-          </td>
-          <td>
-            <span class="badge <?= $svc === 'radarr' ? 'badge-blue' : 'badge-muted' ?>" style="<?= $svc === 'radarr' ? 'background:rgba(160,90,219,.15);color:#a05adb' : '' ?>">
-              <?= htmlspecialchars(ucfirst($svc)) ?>
-            </span>
-          </td>
-          <td>
-            <?php if ($to_fast): ?>
-              <span style="color:var(--green);font-weight:700;font-size:.85rem">&#8594; Fast</span>
-            <?php else: ?>
-              <span style="color:var(--muted);font-weight:700;font-size:.85rem">&#8592; Slow</span>
-            <?php endif; ?>
-          </td>
-          <td style="color:var(--muted);font-size:.8rem"><?= htmlspecialchars($item['mapping'] ?? '') ?></td>
-          <td style="font-size:.75rem;color:var(--muted);font-family:monospace"><?= htmlspecialchars($item['progress'] ?? '') ?></td>
-          <td style="font-size:.75rem;color:var(--muted)"><?= htmlspecialchars($item['started_at'] ?? '—') ?></td>
-          <td style="font-size:.75rem;color:var(--muted)"><?= htmlspecialchars($item['done_at'] ?? '—') ?></td>
-        </tr>
-        <?php endforeach; ?>
-      </tbody>
-    </table>
-    <?php endif; ?>
-  </div>
-
+<?php if ($is_running): ?>
+<!-- Active run banner -->
+<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:1rem;padding:.5rem .75rem;background:rgba(229,160,13,.08);border:1px solid rgba(229,160,13,.2);border-radius:4px;">
+  <span class="dot dot-amber"></span>
+  <span style="font-size:.85rem;font-weight:600;color:var(--accent)">Transfer in progress</span>
+  <span style="font-size:.75rem;color:var(--muted);margin-left:.25rem">
+    <?= count($active_items) ?> item<?= count($active_items) !== 1 ? 's' : '' ?> remaining
+  </span>
+  <?php if ($data && isset($data['mode'])): ?>
+  <span class="badge <?= $mode_classes[$data['mode']] ?? 'badge-muted' ?>" style="margin-left:.25rem">
+    <?= htmlspecialchars($mode_labels[$data['mode']] ?? $data['mode']) ?>
+  </span>
+  <?php endif; ?>
+  <span style="font-size:.7rem;color:var(--muted);margin-left:auto">Auto-refreshing every 3s</span>
+</div>
 <?php endif; ?>
+
+<div class="card">
+  <?php if (empty($active_items)): ?>
+    <div class="empty">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="margin-bottom:.75rem;color:var(--muted)"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      <div>No active transfers</div>
+      <div style="font-size:.8rem;margin-top:.35rem">
+        Files move here when a job is running. &nbsp;<a href="config.php" style="color:var(--accent)">Run Now</a> or check
+        <a href="history.php" style="color:var(--accent)">History</a>.
+      </div>
+    </div>
+  <?php else: ?>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:16px"></th>
+        <th>Title</th>
+        <th>Service</th>
+        <th>Direction</th>
+        <th>Mapping</th>
+        <th>Status</th>
+        <th>Started</th>
+      </tr>
+    </thead>
+    <tbody>
+      <?php foreach ($active_items as $item):
+        $status  = $item['status'] ?? 'pending';
+        $to_fast = ($item['direction'] ?? '') === 'to_fast';
+        $svc     = $item['service'] ?? 'sonarr';
+      ?>
+      <tr>
+        <td>
+          <?php if ($status === 'moving'): ?>
+            <span class="dot dot-amber"></span>
+          <?php else: ?>
+            <span class="dot dot-muted"></span>
+          <?php endif; ?>
+        </td>
+        <td>
+          <div style="font-weight:600;font-size:.875rem"><?= htmlspecialchars($item['name'] ?? '') ?></div>
+          <div style="font-size:.7rem;color:var(--muted);font-family:monospace;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            <?= htmlspecialchars($to_fast ? ($item['src'] ?? '') : ($item['dst'] ?? '')) ?>
+            &nbsp;&rarr;&nbsp;
+            <?= htmlspecialchars($to_fast ? ($item['dst'] ?? '') : ($item['src'] ?? '')) ?>
+          </div>
+        </td>
+        <td>
+          <span class="badge <?= $svc === 'radarr' ? '' : 'badge-muted' ?>"
+            <?= $svc === 'radarr' ? 'style="background:rgba(160,90,219,.15);color:#a05adb"' : '' ?>>
+            <?= htmlspecialchars(ucfirst($svc)) ?>
+          </span>
+        </td>
+        <td>
+          <?php if ($to_fast): ?>
+            <span style="color:var(--green);font-weight:700;font-size:.8rem">&#8594; Fast</span>
+          <?php else: ?>
+            <span style="color:var(--muted);font-weight:700;font-size:.8rem">&#8592; Slow</span>
+          <?php endif; ?>
+        </td>
+        <td style="color:var(--muted);font-size:.8rem"><?= htmlspecialchars($item['mapping'] ?? '') ?></td>
+        <td>
+          <?php if ($status === 'moving'): ?>
+            <span class="badge badge-amber">Moving</span>
+          <?php else: ?>
+            <span class="badge badge-muted">Queued</span>
+          <?php endif; ?>
+        </td>
+        <td style="font-size:.75rem;color:var(--muted)"><?= htmlspecialchars($item['started_at'] ?? '—') ?></td>
+      </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+  <?php endif; ?>
+</div>
 
 <?php layout_end(); ?>

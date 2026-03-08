@@ -148,7 +148,42 @@ def db_migrate(db: sqlite3.Connection) -> None:
             requested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
             status       TEXT    NOT NULL DEFAULT 'pending'
         );
+
+        CREATE TABLE IF NOT EXISTS move_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            media_type      TEXT    NOT NULL DEFAULT '',
+            title           TEXT    NOT NULL DEFAULT '',
+            external_id     INTEGER NOT NULL DEFAULT 0,
+            service         TEXT    NOT NULL DEFAULT '',
+            mapping_id      TEXT    NOT NULL DEFAULT '',
+            folder          TEXT    NOT NULL DEFAULT '',
+            direction       TEXT    NOT NULL DEFAULT '',
+            src_path        TEXT    NOT NULL DEFAULT '',
+            dst_path        TEXT    NOT NULL DEFAULT '',
+            source          TEXT    NOT NULL DEFAULT 'auto',
+            service_updated INTEGER NOT NULL DEFAULT 0,
+            plex_refreshed  INTEGER NOT NULL DEFAULT 0,
+            notes           TEXT    DEFAULT '',
+            moved_at        INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
     """)
+    db.commit()
+
+
+def db_record_history(db: sqlite3.Connection, media_type: str, title: str,
+                      external_id: int, service: str, mapping_id: str, folder: str,
+                      direction: str, src_path, dst_path, source: str,
+                      service_updated: bool, plex_refreshed: bool, notes: str) -> None:
+    db.execute("""
+        INSERT INTO move_history
+            (media_type, title, external_id, service, mapping_id, folder,
+             direction, src_path, dst_path, source, service_updated, plex_refreshed,
+             notes, moved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (media_type, title, external_id, service, mapping_id, folder,
+          direction, str(src_path), str(dst_path), source,
+          1 if service_updated else 0, 1 if plex_refreshed else 0,
+          notes, int(time.time())))
     db.commit()
 
 
@@ -296,19 +331,21 @@ def rescan_movie(movie_id: int, settings: dict, log: logging.Logger) -> None:
         log.error('Radarr rescan exception: %s', exc)
 
 
-def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> None:
-    """Trigger a targeted Plex refresh for the specific folder that changed."""
+def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> bool:
+    """Trigger a targeted Plex refresh for the specific folder that changed.
+    Returns True if the refresh call succeeded."""
     plex  = settings.get('plex', {})
     url   = plex.get('url', '').rstrip('/')
     token = plex.get('token', '')
     if not url or not token:
-        return
+        return False
     try:
         resp = requests.get(f'{url}/library/sections',
-                            params={'X-Plex-Token': token}, timeout=10)
+                            params={'X-Plex-Token': token},
+                            headers={'Accept': 'application/json'}, timeout=10)
         if not resp.ok:
             log.warning('Plex sections fetch returned %d', resp.status_code)
-            return
+            return False
 
         sections   = resp.json().get('MediaContainer', {}).get('Directory', [])
         section_id = None
@@ -329,13 +366,17 @@ def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> None:
                              timeout=15)
             if r.ok:
                 log.info("Plex refresh: section '%s', path '%s'", section_title, new_path)
+                return True
             else:
                 log.warning('Plex targeted refresh returned %d', r.status_code)
+                return False
         else:
             log.warning("Plex: no section matched path '%s' — skipping refresh. "
                         "Check that Plex and this container share the same mount paths.", new_path)
+            return False
     except Exception as exc:
         log.warning('Plex refresh failed: %s', exc)
+        return False
 
 
 # -- Main ----------------------------------------------------------------------
@@ -447,9 +488,13 @@ def main() -> None:
             ok, summary = rsync_move(src, dst, log)
             if ok:
                 queue.done(q_idx, summary)
-                update_sonarr_path(item, new_svc_path, settings, log)
-                rescan_series(item_id, settings, log)
-                notify_plex(settings, new_svc_path, log)
+                svc_updated = update_sonarr_path(item, new_svc_path, settings, log)
+                if svc_updated:
+                    rescan_series(item_id, settings, log)
+                plex_ok = notify_plex(settings, new_svc_path, log)
+                db_record_history(db, media_type, title, external_id, service,
+                                  mapping_id, folder, direction, src, dst,
+                                  'manual', svc_updated, plex_ok, notes)
                 db_upsert(db, media_type, title, external_id, service,
                           mapping_id, folder, new_location, 'manual', notes, relocate_after)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
@@ -496,9 +541,13 @@ def main() -> None:
             ok, summary = rsync_move(src, dst, log)
             if ok:
                 queue.done(q_idx, summary)
-                update_radarr_path(item, new_svc_path, settings, log)
-                rescan_movie(item_id, settings, log)
-                notify_plex(settings, new_svc_path, log)
+                svc_updated = update_radarr_path(item, new_svc_path, settings, log)
+                if svc_updated:
+                    rescan_movie(item_id, settings, log)
+                plex_ok = notify_plex(settings, new_svc_path, log)
+                db_record_history(db, media_type, title, external_id, service,
+                                  mapping_id, folder, direction, src, dst,
+                                  'manual', svc_updated, plex_ok, notes)
                 db_upsert(db, media_type, title, external_id, service,
                           mapping_id, folder, new_location, 'manual', notes, relocate_after)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))

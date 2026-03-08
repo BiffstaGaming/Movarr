@@ -24,16 +24,16 @@ function db_migrate(PDO $db): void
     $db->exec("
         CREATE TABLE IF NOT EXISTS tracked_media (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            media_type       TEXT    NOT NULL,               -- 'show' or 'movie'
+            media_type       TEXT    NOT NULL,
             title            TEXT    NOT NULL DEFAULT '',
-            external_id      INTEGER NOT NULL,               -- tvdb_id or tmdb_id
-            service          TEXT    NOT NULL,               -- 'sonarr' or 'radarr'
+            external_id      INTEGER NOT NULL,
+            service          TEXT    NOT NULL,
             mapping_id       TEXT    NOT NULL,
             folder           TEXT    NOT NULL DEFAULT '',
-            current_location TEXT    NOT NULL DEFAULT 'unknown', -- 'fast' or 'slow'
+            current_location TEXT    NOT NULL DEFAULT 'unknown',
             moved_at         INTEGER,
-            relocate_after   INTEGER,                        -- NULL = never auto-relocate
-            source           TEXT    NOT NULL DEFAULT 'auto',-- 'auto' or 'manual'
+            relocate_after   INTEGER,
+            source           TEXT    NOT NULL DEFAULT 'auto',
             notes            TEXT    DEFAULT '',
             created_at       INTEGER NOT NULL DEFAULT (strftime('%s','now')),
             updated_at       INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -45,10 +45,28 @@ function db_migrate(PDO $db): void
             external_id  INTEGER NOT NULL,
             service      TEXT    NOT NULL,
             mapping_id   TEXT    NOT NULL,
-            direction    TEXT    NOT NULL,                   -- 'to_fast' or 'to_slow'
+            direction    TEXT    NOT NULL,
             notes        TEXT    DEFAULT '',
             requested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-            status       TEXT    NOT NULL DEFAULT 'pending'  -- 'pending','done','error'
+            status       TEXT    NOT NULL DEFAULT 'pending'
+        );
+
+        CREATE TABLE IF NOT EXISTS move_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            media_type      TEXT    NOT NULL DEFAULT '',
+            title           TEXT    NOT NULL DEFAULT '',
+            external_id     INTEGER NOT NULL DEFAULT 0,
+            service         TEXT    NOT NULL DEFAULT '',
+            mapping_id      TEXT    NOT NULL DEFAULT '',
+            folder          TEXT    NOT NULL DEFAULT '',
+            direction       TEXT    NOT NULL DEFAULT '',
+            src_path        TEXT    NOT NULL DEFAULT '',
+            dst_path        TEXT    NOT NULL DEFAULT '',
+            source          TEXT    NOT NULL DEFAULT 'auto',
+            service_updated INTEGER NOT NULL DEFAULT 0,
+            plex_refreshed  INTEGER NOT NULL DEFAULT 0,
+            notes           TEXT    DEFAULT '',
+            moved_at        INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
     ");
 }

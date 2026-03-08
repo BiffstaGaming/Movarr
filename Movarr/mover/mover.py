@@ -154,7 +154,42 @@ def db_migrate(db: sqlite3.Connection) -> None:
             requested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
             status       TEXT    NOT NULL DEFAULT 'pending'
         );
+
+        CREATE TABLE IF NOT EXISTS move_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            media_type      TEXT    NOT NULL DEFAULT '',
+            title           TEXT    NOT NULL DEFAULT '',
+            external_id     INTEGER NOT NULL DEFAULT 0,
+            service         TEXT    NOT NULL DEFAULT '',
+            mapping_id      TEXT    NOT NULL DEFAULT '',
+            folder          TEXT    NOT NULL DEFAULT '',
+            direction       TEXT    NOT NULL DEFAULT '',
+            src_path        TEXT    NOT NULL DEFAULT '',
+            dst_path        TEXT    NOT NULL DEFAULT '',
+            source          TEXT    NOT NULL DEFAULT 'auto',
+            service_updated INTEGER NOT NULL DEFAULT 0,
+            plex_refreshed  INTEGER NOT NULL DEFAULT 0,
+            notes           TEXT    DEFAULT '',
+            moved_at        INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
     """)
+    db.commit()
+
+
+def db_record_history(db: sqlite3.Connection, media_type: str, title: str,
+                      external_id: int, service: str, mapping_id: str, folder: str,
+                      direction: str, src_path, dst_path, source: str,
+                      service_updated: bool, plex_refreshed: bool, notes: str) -> None:
+    db.execute("""
+        INSERT INTO move_history
+            (media_type, title, external_id, service, mapping_id, folder,
+             direction, src_path, dst_path, source, service_updated, plex_refreshed,
+             notes, moved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (media_type, title, external_id, service, mapping_id, folder,
+          direction, str(src_path), str(dst_path), source,
+          1 if service_updated else 0, 1 if plex_refreshed else 0,
+          notes, int(time.time())))
     db.commit()
 
 
@@ -443,20 +478,21 @@ def rescan_movie(movie_id: int, settings: dict, log: logging.Logger) -> bool:
 
 # -- Plex notification ---------------------------------------------------------
 
-def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> None:
-    """Trigger a targeted Plex refresh for the specific folder that changed."""
+def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> bool:
+    """Trigger a targeted Plex refresh for the specific folder that changed.
+    Returns True if the refresh call succeeded."""
     plex  = settings.get('plex', {})
     url   = plex.get('url', '').rstrip('/')
     token = plex.get('token', '')
     if not url or not token:
-        return
+        return False
     try:
-        # Fetch library sections to find the one whose location contains new_path
         resp = requests.get(f'{url}/library/sections',
-                            params={'X-Plex-Token': token}, timeout=10)
+                            params={'X-Plex-Token': token},
+                            headers={'Accept': 'application/json'}, timeout=10)
         if not resp.ok:
             log.warning('Plex sections fetch returned %d', resp.status_code)
-            return
+            return False
 
         sections   = resp.json().get('MediaContainer', {}).get('Directory', [])
         section_id = None
@@ -472,19 +508,22 @@ def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> None:
                 break
 
         if section_id:
-            # Refresh only this path — very fast, touches one show/movie folder
             r = requests.get(f'{url}/library/sections/{section_id}/refresh',
                              params={'X-Plex-Token': token, 'path': new_path},
                              timeout=15)
             if r.ok:
                 log.info("Plex refresh: section '%s', path '%s'", section_title, new_path)
+                return True
             else:
                 log.warning('Plex targeted refresh returned %d', r.status_code)
+                return False
         else:
             log.warning("Plex: no section matched path '%s' — skipping refresh. "
                         "Check that Plex and this container share the same mount paths.", new_path)
+            return False
     except Exception as exc:
         log.warning('Plex refresh failed: %s', exc)
+        return False
 
 
 # -- rsync move ----------------------------------------------------------------
@@ -607,6 +646,7 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
         dst             = dst_base / folder
         new_sonarr_path = new_sonarr_base + '/' + folder
         tvdb_id         = series.get('tvdbId')
+        direction       = 'to_fast' if location == 'fast' else 'to_slow'
         if not src.exists():
             log.warning('Source not found on disk, skipping: %s', src)
             queue.skip(q_idx, 'Source not found on disk')
@@ -616,11 +656,15 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
         if ok:
             queue.done(q_idx, summary)
             if not dry_run:
-                if update_sonarr_path(series, new_sonarr_path, settings, log):
+                svc_updated = update_sonarr_path(series, new_sonarr_path, settings, log)
+                if svc_updated:
                     rescan_series(series['id'], settings, log)
-                notify_plex(settings, new_sonarr_path, log)
+                plex_ok = notify_plex(settings, new_sonarr_path, log)
                 ra = relocate_ts if location == 'fast' else None
                 if tvdb_id:
+                    db_record_history(db, 'show', series['title'], tvdb_id, 'sonarr',
+                                      mapping_id, folder, direction, src, dst,
+                                      'auto', svc_updated, plex_ok, '')
                     db_upsert(db, 'show', series['title'], tvdb_id, 'sonarr',
                               mapping_id, folder, location, 'auto', '', ra)
         else:
@@ -710,6 +754,7 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
         dst             = dst_base / folder
         new_radarr_path = new_radarr_base + '/' + folder
         tmdb_id         = movie.get('tmdbId')
+        direction       = 'to_fast' if location == 'fast' else 'to_slow'
         if not src.exists():
             log.warning('Source not found on disk, skipping: %s', src)
             queue.skip(q_idx, 'Source not found on disk')
@@ -719,11 +764,15 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
         if ok:
             queue.done(q_idx, summary)
             if not dry_run:
-                if update_radarr_path(movie, new_radarr_path, settings, log):
+                svc_updated = update_radarr_path(movie, new_radarr_path, settings, log)
+                if svc_updated:
                     rescan_movie(movie['id'], settings, log)
-                notify_plex(settings, new_radarr_path, log)
+                plex_ok = notify_plex(settings, new_radarr_path, log)
                 ra = relocate_ts if location == 'fast' else None
                 if tmdb_id:
+                    db_record_history(db, 'movie', movie['title'], tmdb_id, 'radarr',
+                                      mapping_id, folder, direction, src, dst,
+                                      'auto', svc_updated, plex_ok, '')
                     db_upsert(db, 'movie', movie['title'], tmdb_id, 'radarr',
                               mapping_id, folder, location, 'auto', '', ra)
         else:

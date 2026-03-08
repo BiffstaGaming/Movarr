@@ -1,15 +1,19 @@
 <?php
 // layout_start($title, $active) - outputs html/head/sidebar/nav up to content div
 // layout_end() - closes everything
-// $active: 'dashboard', 'config', 'queue', 'logs'
+// $active: 'dashboard', 'config', 'queue', 'history', 'logs', 'manual'
 
 function layout_start(string $title, string $active, string $extra_head = ''): void {
-    $nav_items = [
-        'dashboard' => ['href' => 'index.php',  'label' => 'Dashboard', 'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>'],
-        'config'    => ['href' => 'config.php', 'label' => 'Settings',  'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a6.97 6.97 0 0 0-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>'],
-        'queue'     => ['href' => 'queue.php', 'label' => 'Queue',     'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>'],
-        'logs'      => ['href' => 'logs.php',  'label' => 'Logs',      'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z"/></svg>'],
-        'manual'    => ['href' => 'manual.php','label' => 'Manual',    'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v8h8l-8 12v-8H5L13 2z"/></svg>'],
+    // Each entry: type='item' or type='label'
+    $nav = [
+        ['type' => 'item',  'key' => 'dashboard', 'href' => 'index.php',   'label' => 'Dashboard', 'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>'],
+        ['type' => 'item',  'key' => 'manual',    'href' => 'manual.php',  'label' => 'Manual',    'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v8h8l-8 12v-8H5L13 2z"/></svg>'],
+        ['type' => 'label', 'label' => 'Activity'],
+        ['type' => 'item',  'key' => 'queue',     'href' => 'queue.php',   'label' => 'Queue',     'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>'],
+        ['type' => 'item',  'key' => 'history',   'href' => 'history.php', 'label' => 'History',   'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 2.05 4.95L6.64 18.36A9 9 0 1 0 13 3zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>'],
+        ['type' => 'label', 'label' => 'System'],
+        ['type' => 'item',  'key' => 'logs',      'href' => 'logs.php',    'label' => 'Logs',      'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z"/></svg>'],
+        ['type' => 'item',  'key' => 'config',    'href' => 'config.php',  'label' => 'Settings',  'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a6.97 6.97 0 0 0-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>'],
     ];
     ?>
 <!DOCTYPE html>
@@ -103,6 +107,14 @@ body {
 }
 .sidebar nav a svg { flex-shrink: 0; opacity: .8; }
 .sidebar nav a.active svg { opacity: 1; }
+.nav-section-label {
+  padding: .9rem 1.1rem .25rem;
+  font-size: .6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: rgba(255,255,255,.25);
+}
 
 /* ── Main area ── */
 .layout-main {
@@ -436,12 +448,15 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
     <span>Movarr</span>
   </a>
   <nav>
-    <?php foreach ($nav_items as $key => $item): ?>
-    <a href="<?= $item['href'] ?>" class="<?= $active === $key ? 'active' : '' ?>">
-      <?= $item['icon'] ?>
-      <span><?= $item['label'] ?></span>
+    <?php foreach ($nav as $entry):
+      if ($entry['type'] === 'label'): ?>
+    <div class="nav-section-label"><?= htmlspecialchars($entry['label']) ?></div>
+    <?php else: ?>
+    <a href="<?= $entry['href'] ?>" class="<?= $active === $entry['key'] ? 'active' : '' ?>">
+      <?= $entry['icon'] ?>
+      <span><?= $entry['label'] ?></span>
     </a>
-    <?php endforeach; ?>
+    <?php endif; endforeach; ?>
   </nav>
 </div>
 
