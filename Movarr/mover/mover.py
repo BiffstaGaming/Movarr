@@ -67,13 +67,42 @@ def normalize(title: str) -> str:
 
 # ── Tautulli ──────────────────────────────────────────────────────────────────
 
-def get_watched_titles(settings: dict, log: logging.Logger) -> set[str]:
-    """Return set of normalized show titles watched within watched_days."""
+def get_tvdb_id_from_plex(rating_key: str, tautulli: dict,
+                           log: logging.Logger) -> int | None:
+    """Call Tautulli get_metadata and extract the TVDB ID from Plex GUIDs."""
+    try:
+        resp = requests.get(
+            f"{tautulli['url'].rstrip('/')}/api/v2",
+            params={'apikey': tautulli['api_key'], 'cmd': 'get_metadata',
+                    'rating_key': rating_key},
+            timeout=15)
+        metadata = resp.json()['response']['data']
+        for guid in metadata.get('guids', []):
+            # guid format: "tvdb://12345"
+            if isinstance(guid, str) and guid.startswith('tvdb://'):
+                return int(guid.split('://', 1)[1])
+            # some Plex/Tautulli versions return {'id': 'tvdb://12345'}
+            if isinstance(guid, dict):
+                gid = guid.get('id', '')
+                if gid.startswith('tvdb://'):
+                    return int(gid.split('://', 1)[1])
+    except Exception as exc:
+        log.debug(f"get_metadata failed for rating_key {rating_key}: {exc}")
+    return None
+
+
+def get_watched(settings: dict, log: logging.Logger) -> tuple[set[int], set[str]]:
+    """
+    Return:
+      watched_tvdb_ids  – set of TVDB IDs (int) resolved via Plex metadata
+      watched_titles    – set of normalized titles as fallback for unresolved shows
+    """
     tautulli  = settings['tautulli']
     days      = int(settings.get('watched_days', 30))
     after_str = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
-    watched: set[str] = set()
+    # Collect unique (rating_key, title) pairs from history
+    shows: dict[str, str] = {}   # rating_key → grandparent_title
     start, page = 0, 1000
 
     while True:
@@ -94,16 +123,37 @@ def get_watched_titles(settings: dict, log: logging.Logger) -> set[str]:
             break
 
         for r in records:
+            rk    = str(r.get('grandparent_rating_key', '')).strip()
             title = r.get('grandparent_title', '').strip()
-            if title:
-                watched.add(normalize(title))
+            if rk and title:
+                shows[rk] = title
 
         if len(records) < page:
             break
         start += page
 
-    log.info(f"Tautulli: {len(watched)} unique shows watched in last {days} days")
-    return watched
+    log.info(f"Tautulli: {len(shows)} unique shows watched in last {days} days")
+
+    # Resolve TVDB IDs where possible
+    watched_tvdb_ids: set[int] = set()
+    watched_titles:   set[str] = set()
+    unresolved: list[str]      = []
+
+    for rk, title in shows.items():
+        tvdb_id = get_tvdb_id_from_plex(rk, tautulli, log)
+        if tvdb_id:
+            watched_tvdb_ids.add(tvdb_id)
+            log.debug(f"  TVDB match: '{title}' → tvdb={tvdb_id}")
+        else:
+            watched_titles.add(normalize(title))
+            unresolved.append(title)
+
+    log.info(f"  Resolved via TVDB ID : {len(watched_tvdb_ids)}")
+    log.info(f"  Fallback title match : {len(watched_titles)}")
+    if unresolved:
+        log.debug(f"  Unresolved titles    : {sorted(unresolved)}")
+
+    return watched_tvdb_ids, watched_titles
 
 
 # ── Sonarr ────────────────────────────────────────────────────────────────────
@@ -202,7 +252,8 @@ def rsync_move(src: Path, dst: Path, dry_run: bool, log: logging.Logger) -> bool
 
 # ── Core mapping logic ────────────────────────────────────────────────────────
 
-def process_mapping(mapping: dict, watched_normalized: set[str],
+def process_mapping(mapping: dict, watched_tvdb_ids: set[int],
+                    watched_titles: set[str],
                     all_series: list[dict], settings: dict,
                     dry_run: bool, log: logging.Logger) -> None:
 
@@ -227,13 +278,22 @@ def process_mapping(mapping: dict, watched_normalized: set[str],
 
     to_fast: list[dict] = []
     to_slow: list[dict] = []
+    unmatched: list[str] = []
 
     for series in relevant:
         path        = series['path'].rstrip('/')
         folder_name = Path(path).name
-        is_active   = normalize(folder_name) in watched_normalized
         on_slow     = path.startswith(slow_sonarr + '/')
         on_fast     = path.startswith(fast_sonarr + '/')
+
+        # Primary: match by TVDB ID; fallback: normalized title
+        tvdb_id   = series.get('tvdbId')
+        by_tvdb   = tvdb_id and tvdb_id in watched_tvdb_ids
+        by_title  = normalize(folder_name) in watched_titles
+        is_active = by_tvdb or by_title
+
+        if not is_active and not on_fast:
+            unmatched.append(f"{folder_name} (tvdbId={tvdb_id})")
 
         if on_slow and is_active:
             to_fast.append(series)
@@ -247,6 +307,10 @@ def process_mapping(mapping: dict, watched_normalized: set[str],
     log.info(f"  ← Move to slow: {len(to_slow)}")
     for s in to_slow:
         log.info(f"      {Path(s['path']).name}")
+
+    log.info(f"  ? Watched but unmatched in Sonarr: {len(unmatched)}")
+    for name in sorted(unmatched):
+        log.debug(f"      {name}")
 
     def do_move(series: dict, src_base: Path, dst_base: Path,
                 new_sonarr_base: str) -> None:
@@ -295,7 +359,7 @@ def main() -> None:
     if dry_run:
         log.info('DRY RUN MODE — no files will be moved or deleted')
 
-    watched = get_watched_titles(settings, log)
+    watched_tvdb_ids, watched_titles = get_watched(settings, log)
 
     all_series = get_sonarr_series(settings, log)
     if not all_series:
@@ -305,8 +369,8 @@ def main() -> None:
     for mapping in settings.get('path_mappings', []):
         if mapping.get('service') == 'sonarr':
             try:
-                process_mapping(mapping, watched, all_series,
-                                settings, dry_run, log)
+                process_mapping(mapping, watched_tvdb_ids, watched_titles,
+                                all_series, settings, dry_run, log)
             except Exception as exc:
                 log.error(f"Error in mapping '{mapping.get('name')}': {exc}",
                           exc_info=True)
