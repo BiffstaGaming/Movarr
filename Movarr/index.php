@@ -105,7 +105,7 @@ function time_ago(int $ts): string
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Plex Activity — Last <?= $days ?> Days</title>
+<title>Movarr — Last <?= $days ?> Days</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -236,7 +236,7 @@ function time_ago(int $ts): string
 <header>
   <a class="logo" href="index.php">
     <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="16" fill="#E5A00D"/><path d="M11 8h4.5c3.6 0 6 2.2 6 5.5S19.1 19 15.5 19H14v5h-3V8zm3 8.5h1.3c1.9 0 3.1-1 3.1-3S17.2 10.5 15.3 10.5H14v6z" fill="#1a1a1a"/></svg>
-    <span>Plex Activity</span>
+    <span>Movarr</span>
   </a>
   <nav>
     <a href="index.php" class="active">Dashboard</a>

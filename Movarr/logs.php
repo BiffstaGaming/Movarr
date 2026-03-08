@@ -29,7 +29,7 @@ $auto_refresh = isset($_GET['refresh']);
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Logs — Plex Activity</title>
+<title>Logs — Movarr</title>
 <?php if ($auto_refresh): ?>
 <meta http-equiv="refresh" content="15">
 <?php endif; ?>
@@ -153,6 +153,18 @@ $auto_refresh = isset($_GET['refresh']);
   .separator     .log-level { display: none; }
 
   .empty { color: var(--muted); text-align: center; padding: 3rem; font-size: .9rem; }
+
+  .level-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: .35rem .6rem;
+    font-size: .8rem;
+    cursor: pointer;
+    outline: none;
+  }
+  .level-select:focus { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -160,7 +172,7 @@ $auto_refresh = isset($_GET['refresh']);
 <header>
   <a class="logo" href="index.php">
     <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="16" fill="#E5A00D"/><path d="M11 8h4.5c3.6 0 6 2.2 6 5.5S19.1 19 15.5 19H14v5h-3V8zm3 8.5h1.3c1.9 0 3.1-1 3.1-3S17.2 10.5 15.3 10.5H14v6z" fill="#1a1a1a"/></svg>
-    <span>Plex Activity</span>
+    <span>Movarr</span>
   </a>
   <nav>
     <a href="index.php">Dashboard</a>
@@ -176,6 +188,12 @@ $auto_refresh = isset($_GET['refresh']);
     <a href="logs.php?refresh=1" class="btn <?= $auto_refresh ? 'active' : '' ?>">
       &#9711; Auto-refresh (15s)
     </a>
+    <select class="level-select" id="level-filter" onchange="filterLogs(this.value)">
+      <option value="INFO">INFO</option>
+      <option value="DEBUG">DEBUG</option>
+      <option value="WARNING">WARNING</option>
+      <option value="ERROR">ERROR</option>
+    </select>
     <form method="POST" style="display:inline" onsubmit="return confirm('Clear the log file?')">
       <input type="hidden" name="action" value="clear">
       <button type="submit" class="btn btn-danger">&#128465; Clear Log</button>
@@ -223,6 +241,21 @@ $auto_refresh = isset($_GET['refresh']);
 
 </div>
 
+<script>
+  const LEVELS = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3 };
+
+  function filterLogs(minLevel) {
+    const min = LEVELS[minLevel] ?? 1;
+    document.querySelectorAll('.log-line').forEach(row => {
+      if (row.classList.contains('separator')) { row.style.display = ''; return; }
+      const lvl = [...row.classList].find(c => c.startsWith('level-'))?.replace('level-', '');
+      row.style.display = (LEVELS[lvl] ?? 1) >= min ? '' : 'none';
+    });
+  }
+
+  // Apply INFO default on load
+  filterLogs('INFO');
+</script>
 <?php if ($auto_refresh): ?>
 <script>
   let t = 15;

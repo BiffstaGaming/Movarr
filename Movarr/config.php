@@ -42,6 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ],
             'watched_days'  => max(1, (int)($_POST['watched_days'] ?? 30)),
             'dry_run'       => isset($_POST['dry_run']),
+            'list_only'     => isset($_POST['list_only']),
             'cron_schedule' => trim($_POST['cron_schedule'] ?? '0 3 * * *'),
             'path_mappings' => $mappings,
         ];
@@ -62,7 +63,7 @@ $s = load_settings();
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Config — Plex Activity</title>
+<title>Config — Movarr</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -160,6 +161,7 @@ $s = load_settings();
   .field-hint { font-size: .75rem; color: var(--muted); margin-top: .25rem; }
 
   input[type="text"],
+  input[type="password"],
   input[type="number"],
   select {
     width: 100%;
@@ -173,9 +175,29 @@ $s = load_settings();
     transition: border-color .15s;
   }
   input[type="text"]:focus,
+  input[type="password"]:focus,
   input[type="number"]:focus,
   select:focus { border-color: var(--accent); }
   select option { background: var(--surface); }
+
+  .api-key-wrap {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+  }
+  .api-key-wrap input { flex: 1; }
+  .btn-eye {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: .4rem .5rem;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color .15s, border-color .15s;
+  }
+  .btn-eye:hover { color: var(--accent); border-color: var(--accent); }
 
   .toggle-row {
     display: flex;
@@ -272,7 +294,7 @@ $s = load_settings();
 <header>
   <a class="logo" href="index.php">
     <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="16" fill="#E5A00D"/><path d="M11 8h4.5c3.6 0 6 2.2 6 5.5S19.1 19 15.5 19H14v5h-3V8zm3 8.5h1.3c1.9 0 3.1-1 3.1-3S17.2 10.5 15.3 10.5H14v6z" fill="#1a1a1a"/></svg>
-    <span>Plex Activity</span>
+    <span>Movarr</span>
   </a>
   <nav>
     <a href="index.php">Dashboard</a>
@@ -305,7 +327,12 @@ $s = load_settings();
       </div>
       <div class="field-row">
         <label>API Key</label>
-        <input type="text" name="tautulli_api_key" value="<?= htmlspecialchars($s['tautulli']['api_key']) ?>" placeholder="Settings → Web Interface → API Key">
+        <div class="api-key-wrap">
+          <input type="password" id="tautulli_api_key" name="tautulli_api_key" value="<?= htmlspecialchars($s['tautulli']['api_key']) ?>" placeholder="Settings → Web Interface → API Key">
+          <button type="button" class="btn-eye" onclick="toggleKey('tautulli_api_key', this)" title="Show/hide">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -323,7 +350,12 @@ $s = load_settings();
       </div>
       <div class="field-row">
         <label>API Key</label>
-        <input type="text" name="sonarr_api_key" value="<?= htmlspecialchars($s['sonarr']['api_key']) ?>" placeholder="Settings → General → API Key">
+        <div class="api-key-wrap">
+          <input type="password" id="sonarr_api_key" name="sonarr_api_key" value="<?= htmlspecialchars($s['sonarr']['api_key']) ?>" placeholder="Settings → General → API Key">
+          <button type="button" class="btn-eye" onclick="toggleKey('sonarr_api_key', this)" title="Show/hide">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -353,7 +385,14 @@ $s = load_settings();
         <label>Dry Run</label>
         <div class="toggle-row">
           <input type="checkbox" id="dry_run" name="dry_run" <?= $s['dry_run'] ? 'checked' : '' ?>>
-          <label for="dry_run">Simulate moves only — no files will be touched</label>
+          <label for="dry_run">Simulate moves via rsync — no files will be touched</label>
+        </div>
+      </div>
+      <div class="field-row">
+        <label>List Only</label>
+        <div class="toggle-row">
+          <input type="checkbox" id="list_only" name="list_only" <?= $s['list_only'] ? 'checked' : '' ?>>
+          <label for="list_only">Fetch decisions and log what would move — skips rsync entirely</label>
         </div>
       </div>
     </div>
@@ -428,6 +467,14 @@ function triggerMover(real) {
   // Save first, then trigger
   document.getElementById('form-action').value = 'trigger';
   document.querySelector('form').submit();
+}
+
+function toggleKey(id, btn) {
+  const input = document.getElementById(id);
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  btn.style.color = showing ? '' : 'var(--accent)';
+  btn.style.borderColor = showing ? '' : 'var(--accent)';
 }
 
 // Reset action to 'save' when save button is clicked directly

@@ -28,6 +28,7 @@ function load_settings(): array {
         ],
         'watched_days'   => 30,
         'dry_run'        => true,
+        'list_only'      => false,
         'cron_schedule'  => '0 3 * * *',
         'path_mappings'  => [],
     ];
