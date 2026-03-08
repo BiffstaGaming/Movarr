@@ -1,6 +1,6 @@
 services:
   movarr-dashboard:
-    build: .
+    image: ghcr.io/biffstag​aming/movarr-dashboard:latest
     container_name: movarr-dashboard
     ports:
       - "8080:80"
@@ -16,7 +16,7 @@ services:
 
   # ── Mover (Python + rsync) ─────────────────────────────────────────────────
   movarr-service:
-    build: ./mover
+    image: ghcr.io/biffstag​aming/movarr-service:latest
     container_name: movarr-service
     volumes:
       - config_data:/config
