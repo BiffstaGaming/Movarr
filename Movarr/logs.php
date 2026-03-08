@@ -15,11 +15,31 @@ $log_path  = log_file();
 $log_lines = [];
 $log_size  = 0;
 
+$level_order  = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
+$valid_levels = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR'];
+$sel_level    = in_array($_GET['level'] ?? '', $valid_levels) ? $_GET['level'] : 'INFO';
+$line_limit   = max(1, min(10000, (int)($_GET['limit'] ?? 100)));
+
 if (file_exists($log_path)) {
     $log_size  = filesize($log_path);
-    $all_lines = file($log_path, FILE_IGNORE_NEW_LINES);
-    // Show newest first, limit to 1000 lines
-    $log_lines = array_reverse(array_slice($all_lines, -1000));
+    $all_lines = file($log_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+    if ($sel_level === 'ALL') {
+        $filtered = $all_lines;
+    } else {
+        $min_order = $level_order[$sel_level] ?? 1;
+        $filtered  = array_filter($all_lines, function($line) use ($level_order, $min_order) {
+            // Always keep separator lines
+            if (str_starts_with(trim($line), '===') || str_starts_with(trim($line), '---')) return true;
+            if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[(\w+)\]/', $line, $m)) {
+                return ($level_order[$m[1]] ?? 0) >= $min_order;
+            }
+            return false;
+        });
+    }
+
+    // Take last N of the filtered lines, newest first
+    $log_lines = array_reverse(array_slice(array_values($filtered), -$line_limit));
 }
 
 $auto_refresh = isset($_GET['refresh']);
@@ -184,16 +204,16 @@ $auto_refresh = isset($_GET['refresh']);
 <div class="container">
 
   <div class="toolbar">
-    <a href="logs.php" class="btn">&#8635; Refresh</a>
-    <a href="logs.php?refresh=1" class="btn <?= $auto_refresh ? 'active' : '' ?>">
+    <a href="logs.php?level=<?= $sel_level ?>&limit=<?= $line_limit ?>" class="btn">&#8635; Refresh</a>
+    <a href="logs.php?level=<?= $sel_level ?>&limit=<?= $line_limit ?>&refresh=1" class="btn <?= $auto_refresh ? 'active' : '' ?>">
       &#9711; Auto-refresh (15s)
     </a>
-    <select class="level-select" id="level-filter" onchange="filterLogs(this.value)">
-      <option value="INFO">INFO</option>
-      <option value="DEBUG">DEBUG</option>
-      <option value="WARNING">WARNING</option>
-      <option value="ERROR">ERROR</option>
+    <select class="level-select" id="level-filter" onchange="applyFilters()">
+      <?php foreach (['INFO','ALL','DEBUG','WARNING','ERROR'] as $lvl): ?>
+      <option value="<?= $lvl ?>" <?= $sel_level === $lvl ? 'selected' : '' ?>><?= $lvl ?></option>
+      <?php endforeach; ?>
     </select>
+    <input type="number" id="line-limit" class="level-select" value="<?= $line_limit ?>" min="1" max="10000" style="width:70px" title="Max lines" onchange="applyFilters()">
     <form method="POST" style="display:inline" onsubmit="return confirm('Clear the log file?')">
       <input type="hidden" name="action" value="clear">
       <button type="submit" class="btn btn-danger">&#128465; Clear Log</button>
@@ -242,19 +262,12 @@ $auto_refresh = isset($_GET['refresh']);
 </div>
 
 <script>
-  const LEVELS = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3 };
-
-  function filterLogs(minLevel) {
-    const min = LEVELS[minLevel] ?? 1;
-    document.querySelectorAll('.log-line').forEach(row => {
-      if (row.classList.contains('separator')) { row.style.display = ''; return; }
-      const lvl = [...row.classList].find(c => c.startsWith('level-'))?.replace('level-', '');
-      row.style.display = (LEVELS[lvl] ?? 1) >= min ? '' : 'none';
-    });
+  function applyFilters() {
+    const level = document.getElementById('level-filter').value;
+    const limit = document.getElementById('line-limit').value;
+    const params = new URLSearchParams({ level, limit <?= $auto_refresh ? ", refresh: 1" : "" ?> });
+    window.location.href = 'logs.php?' + params.toString();
   }
-
-  // Apply INFO default on load
-  filterLogs('INFO');
 </script>
 <?php if ($auto_refresh): ?>
 <script>
