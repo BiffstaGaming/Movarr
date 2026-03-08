@@ -12,6 +12,11 @@
       # Once you save settings via the Config page these are ignored.
       TAUTULLI_URL: ${TAUTULLI_URL:-http://vm-plex.home:8181}
       TAUTULLI_API_KEY: ${TAUTULLI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "sh", "-c", "touch /config/.write_test && rm /config/.write_test"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   #Mover (Python + rsync)
@@ -29,6 +34,11 @@
       - /mnt/metadata-nvme/torrents:/torrentDownloads
     environment:
       CONFIG_PATH: /config
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os, sys; f='/config/.write_test'; open(f,'w').close(); os.remove(f)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
 # Shared named volume for settings.json, mover.log, and the trigger file

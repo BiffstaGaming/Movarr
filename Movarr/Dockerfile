@@ -7,4 +7,10 @@ COPY config.php  /var/www/html/config.php
 COPY logs.php    /var/www/html/logs.php
 COPY includes/   /var/www/html/includes/
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 80
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["apache2-foreground"]

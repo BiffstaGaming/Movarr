@@ -73,8 +73,23 @@ def run_mover() -> None:
         log.info("mover.py finished successfully")
 
 
+def check_config_writable() -> None:
+    import stat
+    test_file = CONFIG_DIR / '.write_test'
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_DIR.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+        test_file.write_text('ok')
+        test_file.unlink()
+        log.info(f"Config volume is writable: {CONFIG_DIR}")
+    except OSError as e:
+        log.critical(f"Config volume is not writable ({CONFIG_DIR}): {e}")
+        sys.exit(1)
+
+
 def main() -> None:
     log.info("Scheduler started")
+    check_config_writable()
     if not HAS_CRONITER:
         log.warning("croniter not installed — falling back to daily 03:00 schedule")
 
