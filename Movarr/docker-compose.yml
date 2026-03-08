@@ -1,9 +1,7 @@
 services:
-
-  # ── Web dashboard (PHP) ────────────────────────────────────────────────────
-  dashboard:
+  movarr-dashboard:
     build: .
-    container_name: plex-dashboard
+    container_name: movarr-dashboard
     ports:
       - "8080:80"
     volumes:
@@ -17,19 +15,19 @@ services:
     restart: unless-stopped
 
   # ── Mover (Python + rsync) ─────────────────────────────────────────────────
-  mover:
+  movarr-service:
     build: ./mover
-    container_name: plex-mover
+    container_name: movarr-service
     volumes:
       - config_data:/config
       # ── Media volumes ──────────────────────────────────────────────────────
       # Mount the same host paths that Sonarr uses so the mover can see them.
       # The container paths here MUST match what you configure in the UI under
       # "Mover Container Paths" for each path mapping.
-      #
-      # Example (edit to match your actual host paths):
-      # - /mnt/mediaStorage/tvshows:/TvMedia
-      # - /mnt/metadata-nvme/downloads:/downloads
+      - /mnt/mediaStorage/tvshows:/TvMedia
+      - /mnt/metadata-nvme/fast-media/tvshows:/TvMediaFast
+      - /mnt/metadata-nvme/downloads:/downloads
+      - /mnt/metadata-nvme/torrents:/torrentDownloads
     environment:
       CONFIG_PATH: /config
     restart: unless-stopped
