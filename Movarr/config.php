@@ -45,6 +45,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'url'     => trim($_POST['radarr_url'] ?? ''),
                 'api_key' => trim($_POST['radarr_api_key'] ?? ''),
             ],
+            'plex' => [
+                'url'   => trim($_POST['plex_url'] ?? ''),
+                'token' => trim($_POST['plex_token'] ?? ''),
+            ],
             'watched_days'  => max(1, (int)($_POST['watched_days'] ?? 30)),
             'dry_run'       => isset($_POST['dry_run']),
             'list_only'     => isset($_POST['list_only']),
@@ -141,6 +145,30 @@ layout_start('Settings', 'config');
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Plex ── -->
+<div class="card" style="margin-bottom:.75rem">
+  <div class="card-header">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+    Plex
+  </div>
+  <div style="padding:.75rem 1rem">
+    <div class="field-row">
+      <label>URL</label>
+      <input type="text" name="plex_url" value="<?= htmlspecialchars($s['plex']['url']) ?>" placeholder="http://vm-plex.home:32400">
+    </div>
+    <div class="field-row">
+      <label>Token</label>
+      <div class="api-key-wrap">
+        <input type="password" id="plex_token" name="plex_token" value="<?= htmlspecialchars($s['plex']['token']) ?>" placeholder="Settings → Troubleshooting → X-Plex-Token">
+        <button type="button" class="btn-eye" onclick="toggleKey('plex_token', this)" title="Show/hide">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div class="field-hint" style="grid-column:2">Used to trigger a library refresh after every move. Find your token at: Plex Web → Settings → Troubleshooting → Show → X-Plex-Token.</div>
     </div>
   </div>
 </div>

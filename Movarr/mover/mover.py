@@ -441,6 +441,52 @@ def rescan_movie(movie_id: int, settings: dict, log: logging.Logger) -> bool:
     return False
 
 
+# -- Plex notification ---------------------------------------------------------
+
+def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> None:
+    """Trigger a targeted Plex refresh for the specific folder that changed."""
+    plex  = settings.get('plex', {})
+    url   = plex.get('url', '').rstrip('/')
+    token = plex.get('token', '')
+    if not url or not token:
+        return
+    try:
+        # Fetch library sections to find the one whose location contains new_path
+        resp = requests.get(f'{url}/library/sections',
+                            params={'X-Plex-Token': token}, timeout=10)
+        if not resp.ok:
+            log.warning('Plex sections fetch returned %d', resp.status_code)
+            return
+
+        sections   = resp.json().get('MediaContainer', {}).get('Directory', [])
+        section_id = None
+        section_title = ''
+        for s in sections:
+            for loc in s.get('Location', []):
+                if new_path.startswith(loc['path'].rstrip('/') + '/') or \
+                   new_path == loc['path'].rstrip('/'):
+                    section_id    = s['key']
+                    section_title = s.get('title', section_id)
+                    break
+            if section_id:
+                break
+
+        if section_id:
+            # Refresh only this path — very fast, touches one show/movie folder
+            r = requests.get(f'{url}/library/sections/{section_id}/refresh',
+                             params={'X-Plex-Token': token, 'path': new_path},
+                             timeout=15)
+            if r.ok:
+                log.info("Plex refresh: section '%s', path '%s'", section_title, new_path)
+            else:
+                log.warning('Plex targeted refresh returned %d', r.status_code)
+        else:
+            log.warning("Plex: no section matched path '%s' — skipping refresh. "
+                        "Check that Plex and this container share the same mount paths.", new_path)
+    except Exception as exc:
+        log.warning('Plex refresh failed: %s', exc)
+
+
 # -- rsync move ----------------------------------------------------------------
 
 def rsync_move(src: Path, dst: Path, dry_run: bool,
@@ -572,6 +618,7 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
             if not dry_run:
                 if update_sonarr_path(series, new_sonarr_path, settings, log):
                     rescan_series(series['id'], settings, log)
+                notify_plex(settings, new_sonarr_path, log)
                 ra = relocate_ts if location == 'fast' else None
                 if tvdb_id:
                     db_upsert(db, 'show', series['title'], tvdb_id, 'sonarr',
@@ -674,6 +721,7 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
             if not dry_run:
                 if update_radarr_path(movie, new_radarr_path, settings, log):
                     rescan_movie(movie['id'], settings, log)
+                notify_plex(settings, new_radarr_path, log)
                 ra = relocate_ts if location == 'fast' else None
                 if tmdb_id:
                     db_upsert(db, 'movie', movie['title'], tmdb_id, 'radarr',

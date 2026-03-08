@@ -296,6 +296,48 @@ def rescan_movie(movie_id: int, settings: dict, log: logging.Logger) -> None:
         log.error('Radarr rescan exception: %s', exc)
 
 
+def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> None:
+    """Trigger a targeted Plex refresh for the specific folder that changed."""
+    plex  = settings.get('plex', {})
+    url   = plex.get('url', '').rstrip('/')
+    token = plex.get('token', '')
+    if not url or not token:
+        return
+    try:
+        resp = requests.get(f'{url}/library/sections',
+                            params={'X-Plex-Token': token}, timeout=10)
+        if not resp.ok:
+            log.warning('Plex sections fetch returned %d', resp.status_code)
+            return
+
+        sections   = resp.json().get('MediaContainer', {}).get('Directory', [])
+        section_id = None
+        section_title = ''
+        for s in sections:
+            for loc in s.get('Location', []):
+                if new_path.startswith(loc['path'].rstrip('/') + '/') or \
+                   new_path == loc['path'].rstrip('/'):
+                    section_id    = s['key']
+                    section_title = s.get('title', section_id)
+                    break
+            if section_id:
+                break
+
+        if section_id:
+            r = requests.get(f'{url}/library/sections/{section_id}/refresh',
+                             params={'X-Plex-Token': token, 'path': new_path},
+                             timeout=15)
+            if r.ok:
+                log.info("Plex refresh: section '%s', path '%s'", section_title, new_path)
+            else:
+                log.warning('Plex targeted refresh returned %d', r.status_code)
+        else:
+            log.warning("Plex: no section matched path '%s' — skipping refresh. "
+                        "Check that Plex and this container share the same mount paths.", new_path)
+    except Exception as exc:
+        log.warning('Plex refresh failed: %s', exc)
+
+
 # -- Main ----------------------------------------------------------------------
 
 def main() -> None:
@@ -407,6 +449,7 @@ def main() -> None:
                 queue.done(q_idx, summary)
                 update_sonarr_path(item, new_svc_path, settings, log)
                 rescan_series(item_id, settings, log)
+                notify_plex(settings, new_svc_path, log)
                 db_upsert(db, media_type, title, external_id, service,
                           mapping_id, folder, new_location, 'manual', notes, relocate_after)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
@@ -455,6 +498,7 @@ def main() -> None:
                 queue.done(q_idx, summary)
                 update_radarr_path(item, new_svc_path, settings, log)
                 rescan_movie(item_id, settings, log)
+                notify_plex(settings, new_svc_path, log)
                 db_upsert(db, media_type, title, external_id, service,
                           mapping_id, folder, new_location, 'manual', notes, relocate_after)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))

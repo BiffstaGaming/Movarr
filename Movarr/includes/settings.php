@@ -33,6 +33,10 @@ function load_settings(): array {
             'url'     => getenv('RADARR_URL') ?: '',
             'api_key' => getenv('RADARR_API_KEY') ?: '',
         ],
+        'plex' => [
+            'url'   => getenv('PLEX_URL') ?: '',
+            'token' => getenv('PLEX_TOKEN') ?: '',
+        ],
         'watched_days'   => 30,
         'dry_run'        => true,
         'list_only'      => false,
