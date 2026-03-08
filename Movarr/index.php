@@ -53,7 +53,6 @@ if ($apiKey) {
 
         $records = $history['data'] ?? [];
         foreach ($records as $r) {
-            if (($r['date'] ?? 0) < $cutoff) continue;
             $show = $r['grandparent_title'] ?? 'Unknown Show';
             if (!isset($tvShows[$show])) {
                 $tvShows[$show] = ['plays' => 0, 'users' => [], 'thumb' => $r['grandparent_thumb'] ?? '', 'last_watched' => 0];
