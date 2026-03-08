@@ -13,7 +13,8 @@ function config_base(): string {
 }
 
 function settings_file(): string { return config_base() . '/settings.json'; }
-function trigger_file(): string  { return config_base() . '/.trigger'; }
+function trigger_file(): string        { return config_base() . '/.trigger'; }
+function manual_trigger_file(): string { return config_base() . '/.manual_trigger'; }
 function log_file(): string      { return config_base() . '/mover.log'; }
 function queue_file(): string    { return config_base() . '/queue.json'; }
 function db_file(): string       { return config_base() . '/movarr.db'; }

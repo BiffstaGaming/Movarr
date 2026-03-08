@@ -38,7 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
             $title = resolve_title($s, $service, $ext_id);
 
             db_queue_move($db, $ext_id, $service, $mapping_id, $direction, $notes);
-            write_trigger();  // kick off the mover
+            // Write the MANUAL trigger — runs manual_move.py only, ignores dry-run
+            file_put_contents(manual_trigger_file(), date('c'));
 
             $label    = $direction === 'to_fast' ? '→ Fast' : '← Slow';
             $message  = ($title ? "\"$title\"" : "ID $ext_id") . " queued ($label). Mover triggered.";

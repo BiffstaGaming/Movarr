@@ -27,9 +27,11 @@ except ImportError:
 CONFIG_DIR    = Path(__file__).parent.parent / 'config'  # overridden by env
 import os
 CONFIG_DIR    = Path(os.getenv('CONFIG_PATH', '/config'))
-TRIGGER_FILE  = CONFIG_DIR / '.trigger'
-SETTINGS_FILE = CONFIG_DIR / 'settings.json'
-MOVER_SCRIPT  = Path(__file__).parent / 'mover.py'
+TRIGGER_FILE        = CONFIG_DIR / '.trigger'
+MANUAL_TRIGGER_FILE = CONFIG_DIR / '.manual_trigger'
+SETTINGS_FILE       = CONFIG_DIR / 'settings.json'
+MOVER_SCRIPT        = Path(__file__).parent / 'mover.py'
+MANUAL_SCRIPT       = Path(__file__).parent / 'manual_move.py'
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,6 +75,15 @@ def run_mover() -> None:
         log.info("mover.py finished successfully")
 
 
+def run_manual_mover() -> None:
+    log.info("Starting manual_move.py ...")
+    result = subprocess.run([sys.executable, str(MANUAL_SCRIPT)])
+    if result.returncode != 0:
+        log.error(f"manual_move.py exited with code {result.returncode}")
+    else:
+        log.info("manual_move.py finished successfully")
+
+
 def check_config_writable() -> None:
     import stat
     test_file = CONFIG_DIR / '.write_test'
@@ -106,9 +117,14 @@ def main() -> None:
             next_run  = next_run_time(cron_expr)
             log.info(f"Schedule changed → {cron_expr}  next run: {next_run:%Y-%m-%d %H:%M:%S}")
 
-        if TRIGGER_FILE.exists():
+        if MANUAL_TRIGGER_FILE.exists():
+            MANUAL_TRIGGER_FILE.unlink(missing_ok=True)
+            log.info("Manual move trigger detected — running manual_move.py only")
+            run_manual_mover()
+
+        elif TRIGGER_FILE.exists():
             TRIGGER_FILE.unlink(missing_ok=True)
-            log.info("Manual trigger detected")
+            log.info("Full run trigger detected")
             run_mover()
             next_run = next_run_time(cron_expr)
             log.info(f"Next scheduled run: {next_run:%Y-%m-%d %H:%M:%S}")

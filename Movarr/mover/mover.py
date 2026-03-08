@@ -481,139 +481,6 @@ def rsync_move(src: Path, dst: Path, dry_run: bool,
     return True, summary
 
 
-# -- Manual pending moves ------------------------------------------------------
-
-def process_pending_moves(db: sqlite3.Connection, settings: dict,
-                          all_series: list, all_movies: list,
-                          dry_run: bool, queue: QueueWriter,
-                          log: logging.Logger) -> None:
-    """Process manual move requests queued via the web UI."""
-    rows = db.execute("SELECT * FROM pending_moves WHERE status='pending' ORDER BY requested_at").fetchall()
-    if not rows:
-        return
-
-    log.info('Processing %d pending manual move(s)', len(rows))
-    days = int(settings.get('watched_days', 30))
-    now  = int(time.time())
-    relocate_ts = now + (days * 86400)
-
-    for row in rows:
-        pm_id       = row['id']
-        external_id = row['external_id']
-        service     = row['service']
-        mapping_id  = row['mapping_id']
-        direction   = row['direction']
-        notes       = row['notes'] or ''
-
-        mapping = next((m for m in settings.get('path_mappings', [])
-                        if m.get('id') == mapping_id), None)
-        if not mapping:
-            log.error('Pending move %d: mapping "%s" not found', pm_id, mapping_id)
-            db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-            db.commit()
-            continue
-
-        name        = mapping.get('name', mapping_id)
-        slow_mover  = Path(mapping['slow_path_mover'])
-        fast_mover  = Path(mapping['fast_path_mover'])
-        slow_svc    = mapping['slow_path_sonarr'].rstrip('/')
-        fast_svc    = mapping['fast_path_sonarr'].rstrip('/')
-
-        if service == 'sonarr':
-            item = next((s for s in all_series if s.get('tvdbId') == external_id), None)
-            if not item:
-                log.error('Pending move %d: tvdbId=%d not found in Sonarr', pm_id, external_id)
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-                db.commit()
-                continue
-            media_type = 'show'
-            title      = item['title']
-            folder     = Path(item['path']).name
-            item_id    = item['id']
-
-            if direction == 'to_fast':
-                src, dst        = slow_mover / folder, fast_mover / folder
-                new_svc_path    = fast_svc + '/' + folder
-                new_location    = 'fast'
-                relocate_after  = relocate_ts
-            else:
-                src, dst        = fast_mover / folder, slow_mover / folder
-                new_svc_path    = slow_svc + '/' + folder
-                new_location    = 'slow'
-                relocate_after  = None
-
-            q_idx = queue.add_item(f'manual_sonarr_{item_id}', title, 'sonarr',
-                                   name, direction, str(src), str(dst))
-            if not src.exists():
-                log.warning('Manual move: source not found: %s', src)
-                queue.skip(q_idx, 'Source not found')
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-                db.commit()
-                continue
-
-            queue.start(q_idx)
-            ok, summary = rsync_move(src, dst, dry_run, log)
-            if ok:
-                queue.done(q_idx, summary)
-                if not dry_run:
-                    update_sonarr_path(item, new_svc_path, settings, log)
-                    rescan_series(item_id, settings, log)
-                    db_upsert(db, media_type, title, external_id, service,
-                              mapping_id, folder, new_location, 'manual', notes, relocate_after)
-                db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
-            else:
-                queue.error(q_idx, 'rsync failed')
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-
-        elif service == 'radarr':
-            item = next((m for m in all_movies if m.get('tmdbId') == external_id), None)
-            if not item:
-                log.error('Pending move %d: tmdbId=%d not found in Radarr', pm_id, external_id)
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-                db.commit()
-                continue
-            media_type = 'movie'
-            title      = item['title']
-            folder     = Path(item['path']).name
-            item_id    = item['id']
-
-            if direction == 'to_fast':
-                src, dst        = slow_mover / folder, fast_mover / folder
-                new_svc_path    = fast_svc + '/' + folder
-                new_location    = 'fast'
-                relocate_after  = relocate_ts
-            else:
-                src, dst        = fast_mover / folder, slow_mover / folder
-                new_svc_path    = slow_svc + '/' + folder
-                new_location    = 'slow'
-                relocate_after  = None
-
-            q_idx = queue.add_item(f'manual_radarr_{item_id}', title, 'radarr',
-                                   name, direction, str(src), str(dst))
-            if not src.exists():
-                log.warning('Manual move: source not found: %s', src)
-                queue.skip(q_idx, 'Source not found')
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-                db.commit()
-                continue
-
-            queue.start(q_idx)
-            ok, summary = rsync_move(src, dst, dry_run, log)
-            if ok:
-                queue.done(q_idx, summary)
-                if not dry_run:
-                    update_radarr_path(item, new_svc_path, settings, log)
-                    rescan_movie(item_id, settings, log)
-                    db_upsert(db, media_type, title, external_id, service,
-                              mapping_id, folder, new_location, 'manual', notes, relocate_after)
-                db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
-            else:
-                queue.error(q_idx, 'rsync failed')
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
-
-        db.commit()
-
-
 # -- Core mapping logic: Sonarr ------------------------------------------------
 
 def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set,
@@ -866,7 +733,7 @@ def main() -> None:
     needs_sonarr = any(m.get('service') == 'sonarr' for m in mappings)
     needs_radarr = any(m.get('service') == 'radarr' for m in mappings)
 
-    # -- Step 1: Load Sonarr/Radarr data (needed for pending moves too) --------
+    # -- Step 1: Load Sonarr/Radarr data ----------------------------------------
     all_series, all_movies = [], []
 
     if needs_sonarr:
@@ -877,20 +744,7 @@ def main() -> None:
     if needs_radarr:
         all_movies = get_radarr_movies(settings, log)
 
-    # -- Step 2: Process pending manual moves ----------------------------------
-    if db and not list_only:
-        # If pending moves reference a service not yet loaded, load it
-        pending_check = db.execute("SELECT DISTINCT service FROM pending_moves WHERE status='pending'").fetchall()
-        pending_services = {r['service'] for r in pending_check}
-        if 'sonarr' in pending_services and not all_series:
-            all_series = get_sonarr_series(settings, log)
-        if 'radarr' in pending_services and not all_movies:
-            all_movies = get_radarr_movies(settings, log)
-
-        process_pending_moves(db, settings, all_series, all_movies,
-                              dry_run, queue, log)
-
-    # -- Step 3: Load Tautulli watched sets ------------------------------------
+    # -- Step 2: Load Tautulli watched sets ------------------------------------
     tautulli_tvdb_ids,    watched_titles       = set(), set()
     tautulli_tmdb_ids,    watched_movie_titles = set(), set()
 
@@ -899,7 +753,7 @@ def main() -> None:
     if needs_radarr:
         tautulli_tmdb_ids, watched_movie_titles = get_watched_movies(settings, log)
 
-    # -- Step 4: Load DB-pinned IDs and augment watched sets -------------------
+    # -- Step 3: Load DB-pinned IDs and augment watched sets -------------------
     if db:
         now = int(time.time())
         pinned_tvdb = {row['external_id'] for row in db.execute(
@@ -922,7 +776,7 @@ def main() -> None:
     watched_tvdb_ids = tautulli_tvdb_ids | pinned_tvdb
     watched_tmdb_ids = tautulli_tmdb_ids | pinned_tmdb
 
-    # -- Step 5: Run auto mapping logic ----------------------------------------
+    # -- Step 4: Run auto mapping logic ----------------------------------------
     for mapping in mappings:
         service = mapping.get('service', 'sonarr')
         try:
