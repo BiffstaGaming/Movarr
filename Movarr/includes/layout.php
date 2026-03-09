@@ -1,21 +1,41 @@
 <?php
 // layout_start($title, $active) - outputs html/head/sidebar/nav up to content div
 // layout_end() - closes everything
-// $active: 'dashboard', 'config', 'queue', 'history', 'logs', 'manual'
+// $active: 'dashboard', 'config', 'queue', 'history', 'logs', 'manual', 'tracked'
 
 function layout_start(string $title, string $active, string $extra_head = ''): void {
-    // Each entry: type='item' or type='label'
+    // Grouped nav: type='item' = standalone link, type='group' = expandable parent
     $nav = [
         ['type' => 'item',  'key' => 'dashboard', 'href' => 'index.php',   'label' => 'Dashboard', 'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>'],
         ['type' => 'item',  'key' => 'manual',    'href' => 'manual.php',  'label' => 'Manual',    'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v8h8l-8 12v-8H5L13 2z"/></svg>'],
         ['type' => 'item',  'key' => 'tracked',   'href' => 'tracked.php', 'label' => 'Tracked',   'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h3v3H4V5zm0 5.5h3v3H4v-3zm0 5.5h3v3H4v-3zm5-11h11v3H9V5zm0 5.5h11v3H9v-3zm0 5.5h11v3H9v-3z"/></svg>'],
-        ['type' => 'label', 'label' => 'Activity'],
-        ['type' => 'item',  'key' => 'queue',     'href' => 'queue.php',   'label' => 'Queue',     'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>'],
-        ['type' => 'item',  'key' => 'history',   'href' => 'history.php', 'label' => 'History',   'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 2.05 4.95L6.64 18.36A9 9 0 1 0 13 3zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>'],
-        ['type' => 'label', 'label' => 'System'],
-        ['type' => 'item',  'key' => 'logs',      'href' => 'logs.php',    'label' => 'Logs',      'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z"/></svg>'],
-        ['type' => 'item',  'key' => 'config',    'href' => 'config.php',  'label' => 'Settings',  'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a6.97 6.97 0 0 0-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>'],
+        ['type' => 'group', 'key' => 'activity',  'label' => 'Activity',
+            'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+            'children' => [
+                ['key' => 'queue',   'href' => 'queue.php',   'label' => 'Queue'],
+                ['key' => 'history', 'href' => 'history.php', 'label' => 'History'],
+            ],
+        ],
+        ['type' => 'group', 'key' => 'system', 'label' => 'System',
+            'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM4 15V9h16v6H4zm8-4a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM6 11h2v2H6zm8 0h4v2h-4z"/></svg>',
+            'children' => [
+                ['key' => 'logs',   'href' => 'logs.php',   'label' => 'Logs'],
+                ['key' => 'config', 'href' => 'config.php', 'label' => 'Settings'],
+            ],
+        ],
     ];
+
+    // Determine which groups should be expanded (contains the active page)
+    $expanded_groups = [];
+    foreach ($nav as $entry) {
+        if ($entry['type'] === 'group') {
+            foreach ($entry['children'] as $child) {
+                if ($child['key'] === $active) {
+                    $expanded_groups[] = $entry['key'];
+                }
+            }
+        }
+    }
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -65,6 +85,7 @@ body {
   flex-direction: column;
   z-index: 100;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar-logo {
@@ -74,6 +95,7 @@ body {
   padding: 1.1rem 1.1rem 1rem;
   border-bottom: 1px solid rgba(255,255,255,.06);
   text-decoration: none;
+  flex-shrink: 0;
 }
 .sidebar-logo img { width: 32px; height: 32px; border-radius: 6px; flex-shrink: 0; }
 .sidebar-logo span {
@@ -83,8 +105,10 @@ body {
   letter-spacing: .02em;
 }
 
-.sidebar nav { padding: .5rem 0; flex: 1; }
-.sidebar nav a {
+.sidebar nav { padding: .35rem 0; flex: 1; }
+
+/* ── Standalone nav items ── */
+.nav-item {
   display: flex;
   align-items: center;
   gap: .7rem;
@@ -95,27 +119,92 @@ body {
   font-weight: 500;
   border-left: 3px solid transparent;
   transition: color .15s, background .15s, border-color .15s;
+  white-space: nowrap;
+  overflow: hidden;
 }
-.sidebar nav a:hover {
+.nav-item:hover {
   color: var(--text);
   background: rgba(255,255,255,.04);
   border-left-color: rgba(255,255,255,.15);
 }
-.sidebar nav a.active {
+.nav-item.active {
   color: var(--accent);
   background: var(--accent-dim);
   border-left-color: var(--accent);
 }
-.sidebar nav a svg { flex-shrink: 0; opacity: .8; }
-.sidebar nav a.active svg { opacity: 1; }
-.nav-section-label {
-  padding: .9rem 1.1rem .25rem;
-  font-size: .6rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-  color: rgba(255,255,255,.25);
+.nav-item svg { flex-shrink: 0; opacity: .75; }
+.nav-item.active svg { opacity: 1; }
+.nav-item span { overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Group (expandable) ── */
+.nav-group { border-left: 3px solid transparent; }
+.nav-group.group-active { border-left-color: var(--accent); }
+
+.nav-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: .6rem 1.1rem;
+  color: var(--muted);
+  font-size: .875rem;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  transition: color .15s, background .15s;
+  white-space: nowrap;
+  overflow: hidden;
 }
+.nav-group-toggle:hover {
+  color: var(--text);
+  background: rgba(255,255,255,.04);
+}
+.nav-group.group-active .nav-group-toggle {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.nav-group-toggle svg:first-child { flex-shrink: 0; opacity: .75; }
+.nav-group.group-active .nav-group-toggle svg:first-child { opacity: 1; }
+.nav-group-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+.nav-group-arrow {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  color: rgba(255,255,255,.25);
+  transition: transform .2s ease, color .15s;
+}
+.nav-group.expanded .nav-group-arrow { transform: rotate(90deg); color: rgba(255,255,255,.45); }
+
+/* ── Group children ── */
+.nav-group-children {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height .22s ease;
+}
+.nav-group.expanded .nav-group-children { max-height: 200px; }
+
+.nav-child-link {
+  display: flex;
+  align-items: center;
+  padding: .48rem 1.1rem .48rem 2.85rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: .85rem;
+  font-weight: 500;
+  transition: color .15s, background .15s;
+  white-space: nowrap;
+  border-left: none;
+}
+.nav-child-link:hover {
+  color: var(--text);
+  background: rgba(255,255,255,.04);
+}
+.nav-child-link.active { color: var(--accent); }
 
 /* ── Main area ── */
 .layout-main {
@@ -141,7 +230,7 @@ body {
   color: var(--text);
 }
 
-.content { padding: 1.5rem; flex: 1; max-width: 1200px; }
+.content { padding: 1.5rem; flex: 1; }
 
 /* ── Common cards ── */
 .card {
@@ -316,42 +405,6 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .toggle-wrap { display: flex; align-items: center; gap: .7rem; padding-top: .35rem; }
 .toggle-wrap label { font-size: .85rem; color: var(--text); cursor: pointer; }
 
-/* ── Media cards (dashboard) ── */
-.media-grid { display: flex; flex-direction: column; gap: 2px; }
-.media-row {
-  display: flex;
-  align-items: center;
-  gap: .75rem;
-  padding: .55rem .75rem;
-  background: var(--surface);
-  border-bottom: 1px solid rgba(255,255,255,.04);
-  transition: background .1s;
-}
-.media-row:first-child { border-radius: var(--radius) var(--radius) 0 0; }
-.media-row:last-child  { border-bottom: none; border-radius: 0 0 var(--radius) var(--radius); }
-.media-row:only-child  { border-radius: var(--radius); }
-.media-row:hover { background: var(--surface2); }
-.media-thumb {
-  width: 40px; height: 40px;
-  object-fit: cover;
-  border-radius: 3px;
-  flex-shrink: 0;
-  background: var(--border);
-}
-.media-thumb-ph {
-  width: 40px; height: 40px;
-  border-radius: 3px;
-  flex-shrink: 0;
-  background: var(--surface2);
-  display: flex; align-items: center; justify-content: center;
-  color: var(--muted); font-size: 1.1rem;
-}
-.media-info { flex: 1; min-width: 0; }
-.media-title { font-weight: 600; font-size: .875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.media-meta  { font-size: .75rem; color: var(--muted); margin-top: 1px; }
-.media-right { margin-left: auto; flex-shrink: 0; text-align: right; }
-.media-plays { font-size: .75rem; font-weight: 700; color: var(--accent); }
-
 /* ── Mapping cards (config) ── */
 .mapping-card {
   background: var(--surface2);
@@ -360,9 +413,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   padding: .85rem;
   margin-bottom: .5rem;
 }
-.mapping-card-header {
-  display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem;
-}
+.mapping-card-header { display: flex; align-items: center; gap: .6rem; margin-bottom: .75rem; }
 .mapping-card-header input { font-weight: 600; flex: 1; }
 .mapping-card-header select { width: 120px; flex-shrink: 0; }
 .btn-remove {
@@ -433,7 +484,11 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 
 @media (max-width: 700px) {
   .sidebar { width: 56px; }
-  .sidebar-logo span, .sidebar nav a span { display: none; }
+  .sidebar-logo span,
+  .nav-item span,
+  .nav-group-label,
+  .nav-group-arrow,
+  .nav-group-children { display: none; }
   .layout-main { margin-left: 56px; }
   .path-grid { grid-template-columns: 1fr; }
   .field-row { grid-template-columns: 1fr; }
@@ -450,13 +505,40 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   </a>
   <nav>
     <?php foreach ($nav as $entry):
-      if ($entry['type'] === 'label'): ?>
-    <div class="nav-section-label"><?= htmlspecialchars($entry['label']) ?></div>
-    <?php else: ?>
-    <a href="<?= $entry['href'] ?>" class="<?= $active === $entry['key'] ? 'active' : '' ?>">
+      if ($entry['type'] === 'item'):
+        $isActive = ($active === $entry['key']);
+    ?>
+    <a href="<?= $entry['href'] ?>" class="nav-item<?= $isActive ? ' active' : '' ?>">
       <?= $entry['icon'] ?>
-      <span><?= $entry['label'] ?></span>
+      <span><?= htmlspecialchars($entry['label']) ?></span>
     </a>
+
+    <?php elseif ($entry['type'] === 'group'):
+      $childKeys    = array_column($entry['children'], 'key');
+      $groupActive  = in_array($active, $childKeys);
+      $isExpanded   = in_array($entry['key'], $expanded_groups);
+      $groupClasses = 'nav-group';
+      if ($groupActive)  $groupClasses .= ' group-active';
+      if ($isExpanded)   $groupClasses .= ' expanded';
+    ?>
+    <div class="<?= $groupClasses ?>" data-group="<?= htmlspecialchars($entry['key']) ?>">
+      <button class="nav-group-toggle" onclick="toggleGroup(this)">
+        <?= $entry['icon'] ?>
+        <span class="nav-group-label"><?= htmlspecialchars($entry['label']) ?></span>
+        <svg class="nav-group-arrow" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M8 5l8 7-8 7V5z"/>
+        </svg>
+      </button>
+      <div class="nav-group-children">
+        <?php foreach ($entry['children'] as $child):
+          $childActive = ($active === $child['key']);
+        ?>
+        <a href="<?= $child['href'] ?>" class="nav-child-link<?= $childActive ? ' active' : '' ?>">
+          <?= htmlspecialchars($child['label']) ?>
+        </a>
+        <?php endforeach; ?>
+      </div>
+    </div>
     <?php endif; endforeach; ?>
   </nav>
 </div>
@@ -472,6 +554,36 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 function layout_end(): void { ?>
   </div><!-- .content -->
 </div><!-- .layout-main -->
+
+<script>
+function toggleGroup(btn) {
+  var group = btn.closest('.nav-group');
+  group.classList.toggle('expanded');
+  try {
+    var key = group.dataset.group;
+    var open = JSON.parse(localStorage.getItem('nav_open') || '{}');
+    open[key] = group.classList.contains('expanded');
+    localStorage.setItem('nav_open', JSON.stringify(open));
+  } catch(e) {}
+}
+
+// Restore persisted open/closed state (only for groups not already set by PHP)
+(function() {
+  try {
+    var open = JSON.parse(localStorage.getItem('nav_open') || '{}');
+    document.querySelectorAll('.nav-group').forEach(function(g) {
+      var key = g.dataset.group;
+      if (key in open) {
+        // Only apply if PHP hasn't already set it active (active groups stay open)
+        if (!g.classList.contains('group-active')) {
+          if (open[key]) g.classList.add('expanded');
+          else g.classList.remove('expanded');
+        }
+      }
+    });
+  } catch(e) {}
+})();
+</script>
 
 </body>
 </html>
