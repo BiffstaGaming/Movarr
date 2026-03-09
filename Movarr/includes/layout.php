@@ -8,6 +8,7 @@ function layout_start(string $title, string $active, string $extra_head = ''): v
     $nav = [
         ['type' => 'item',  'key' => 'dashboard', 'href' => 'index.php',   'label' => 'Dashboard', 'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>'],
         ['type' => 'item',  'key' => 'manual',    'href' => 'manual.php',  'label' => 'Manual',    'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2v8h8l-8 12v-8H5L13 2z"/></svg>'],
+        ['type' => 'item',  'key' => 'tracked',   'href' => 'tracked.php', 'label' => 'Tracked',   'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h3v3H4V5zm0 5.5h3v3H4v-3zm0 5.5h3v3H4v-3zm5-11h11v3H9V5zm0 5.5h11v3H9v-3zm0 5.5h11v3H9v-3z"/></svg>'],
         ['type' => 'label', 'label' => 'Activity'],
         ['type' => 'item',  'key' => 'queue',     'href' => 'queue.php',   'label' => 'Queue',     'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>'],
         ['type' => 'item',  'key' => 'history',   'href' => 'history.php', 'label' => 'History',   'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 2.05 4.95L6.64 18.36A9 9 0 1 0 13 3zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>'],

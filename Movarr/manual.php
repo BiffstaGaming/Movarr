@@ -45,24 +45,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
             $message  = ($title ? "\"$title\"" : "ID $ext_id") . " queued ($label). Mover triggered.";
         }
 
-    } elseif ($action === 'delete') {
-        $id = (int)($_POST['track_id'] ?? 0);
-        if ($id) { db_delete_tracked($db, $id); $message = 'Entry removed.'; }
-
-    } elseif ($action === 'pin') {
-        $id = (int)($_POST['track_id'] ?? 0);
-        if ($id) { db_pin_tracked($db, $id); $message = 'Pinned — will not auto-relocate.'; }
-
-    } elseif ($action === 'set_relocate') {
-        $id = (int)($_POST['track_id'] ?? 0);
-        $ts = strtotime($_POST['relocate_date'] ?? '');
-        if ($id && $ts) {
-            db_set_relocate($db, $id, $ts);
-            $message = 'Relocate date updated.';
-        } else {
-            $message  = 'Invalid date.';
-            $msg_type = 'error';
-        }
     }
 }
 
@@ -98,23 +80,7 @@ function resolve_title(array $s, string $service, int $ext_id): ?string
     return null;
 }
 
-function fmt_ts(?int $ts): string
-{
-    if (!$ts) return '—';
-    return date('Y-m-d', $ts);
-}
-
-function days_left(?int $relocate_after): string
-{
-    if ($relocate_after === null) return '<span style="color:var(--accent)">Pinned</span>';
-    $diff = $relocate_after - time();
-    if ($diff <= 0) return '<span style="color:var(--red)">Expired</span>';
-    $d = round($diff / 86400);
-    return '<span style="color:var(--green)">' . $d . 'd left</span>';
-}
-
 // ── Data for the page ──────────────────────────────────────────────────────────
-$tracked  = $db ? db_all_tracked($db) : [];
 $pending  = $db ? db_pending_moves($db) : [];
 $mappings = $s['path_mappings'] ?? [];
 
@@ -131,7 +97,7 @@ layout_start('Manual Move', 'manual');
 </div>
 <?php endif; ?>
 
-<div style="display:grid;grid-template-columns:340px 1fr;gap:1.5rem;align-items:start;max-width:1100px">
+<div style="max-width:480px">
 
   <!-- ── Queue Move form ── -->
   <div>
@@ -233,103 +199,10 @@ layout_start('Manual Move', 'manual');
     <?php endif; ?>
   </div>
 
-  <!-- ── Tracked media table ── -->
-  <div>
-    <div class="section-label">
-      Tracked Media
-      <?php if (!empty($tracked)): ?>
-        <span class="badge badge-muted" style="margin-left:.4rem"><?= count($tracked) ?></span>
-      <?php endif; ?>
-    </div>
-    <div class="card">
-      <?php if (empty($tracked)): ?>
-        <div class="empty">Nothing tracked yet.<br>Moves will appear here once the mover runs.</div>
-      <?php else: ?>
-      <table>
-        <thead>
-          <tr>
-            <th></th>
-            <th>Title</th>
-            <th>ID</th>
-            <th>Mapping</th>
-            <th>Location</th>
-            <th>Moved</th>
-            <th>Relocates</th>
-            <th>Source</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-        <?php foreach ($tracked as $row):
-          $on_fast = $row['current_location'] === 'fast';
-          $mapping_name = '';
-          foreach ($mappings as $m) {
-              if ($m['id'] === $row['mapping_id']) { $mapping_name = $m['name'] ?: $m['id']; break; }
-          }
-          if (!$mapping_name) $mapping_name = $row['mapping_id'];
-        ?>
-          <tr>
-            <td style="width:24px">
-              <span class="dot <?= $on_fast ? 'dot-green' : 'dot-muted' ?>"></span>
-            </td>
-            <td>
-              <div style="font-weight:600;font-size:.85rem"><?= htmlspecialchars($row['title'] ?: '—') ?></div>
-              <div style="font-size:.7rem;color:var(--muted)"><?= htmlspecialchars($row['folder'] ?: '') ?></div>
-            </td>
-            <td style="font-size:.75rem;color:var(--muted);font-family:monospace">
-              <span style="font-size:.68rem;color:var(--muted)"><?= $row['service'] === 'sonarr' ? 'TVDB' : 'TMDB' ?></span><br>
-              <?= htmlspecialchars((string)$row['external_id']) ?>
-            </td>
-            <td style="font-size:.78rem;color:var(--muted)"><?= htmlspecialchars($mapping_name) ?></td>
-            <td>
-              <?php if ($on_fast): ?>
-                <span style="color:var(--green);font-weight:700;font-size:.82rem">&#8594; Fast</span>
-              <?php else: ?>
-                <span style="color:var(--muted);font-weight:700;font-size:.82rem">&#8592; Slow</span>
-              <?php endif; ?>
-            </td>
-            <td style="font-size:.78rem;color:var(--muted)"><?= fmt_ts($row['moved_at']) ?></td>
-            <td style="font-size:.78rem"><?= days_left($row['relocate_after']) ?></td>
-            <td>
-              <span class="badge <?= $row['source'] === 'manual' ? 'badge-amber' : 'badge-muted' ?>">
-                <?= htmlspecialchars($row['source']) ?>
-              </span>
-            </td>
-            <td style="white-space:nowrap">
-              <!-- Pin / set date / remove -->
-              <div style="display:flex;gap:.3rem;align-items:center">
-                <?php if ($row['relocate_after'] !== null): ?>
-                <form method="POST" style="display:inline">
-                  <input type="hidden" name="action" value="pin">
-                  <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-                  <button type="submit" class="btn" style="padding:.25rem .5rem;font-size:.7rem" title="Pin (never auto-relocate)">&#128204;</button>
-                </form>
-                <?php endif; ?>
-                <form method="POST" style="display:inline" id="relocate-form-<?= $row['id'] ?>">
-                  <input type="hidden" name="action" value="set_relocate">
-                  <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-                  <input type="date" name="relocate_date"
-                         value="<?= $row['relocate_after'] ? date('Y-m-d', $row['relocate_after']) : '' ?>"
-                         style="width:110px;font-size:.72rem;padding:.2rem .4rem"
-                         onchange="document.getElementById('relocate-form-<?= $row['id'] ?>').submit()"
-                         title="Set relocate date">
-                </form>
-                <form method="POST" style="display:inline"
-                      onsubmit="return confirm('Remove this entry from tracking?')">
-                  <input type="hidden" name="action" value="delete">
-                  <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-                  <button type="submit" class="btn btn-danger" style="padding:.25rem .5rem;font-size:.7rem" title="Remove">&#10005;</button>
-                </form>
-              </div>
-            </td>
-          </tr>
-        <?php endforeach; ?>
-        </tbody>
-      </table>
-      <?php endif; ?>
-    </div>
-  </div>
+</div>
 
+<div style="margin-top:1rem;font-size:.8rem;color:var(--muted)">
+  View and manage all tracked media on the <a href="tracked.php" style="color:var(--accent)">Tracked Media</a> page.
 </div>
 
 <script>
