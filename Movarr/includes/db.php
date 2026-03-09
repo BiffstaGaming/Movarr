@@ -72,9 +72,10 @@ function db_migrate(PDO $db): void
     ");
     // Add new columns if they don't exist yet (idempotent migrations)
     foreach ([
-        "ALTER TABLE move_history   ADD COLUMN time_taken  INTEGER DEFAULT NULL",
+        "ALTER TABLE move_history   ADD COLUMN time_taken   INTEGER DEFAULT NULL",
         "ALTER TABLE move_history   ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
-        "ALTER TABLE pending_moves  ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE pending_moves  ADD COLUMN title        TEXT    NOT NULL DEFAULT ''",
+        "ALTER TABLE tracked_media  ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
     ] as $sql) {
         try { $db->exec($sql); } catch (\PDOException $e) {}
     }

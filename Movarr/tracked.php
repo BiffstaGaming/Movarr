@@ -192,6 +192,7 @@ $extra_head = <<<'CSS'
 .sc-tbl-title   { flex: 1 1 auto; min-width: 120px; }
 .sc-tbl-type    { flex: 0 0 7%;   min-width: 52px; }
 .sc-tbl-loc     { flex: 0 0 7%;   min-width: 52px; }
+.sc-tbl-size    { flex: 0 0 8%;   min-width: 64px; }
 .sc-tbl-moved   { flex: 0 0 10%;  min-width: 82px; }
 .sc-tbl-reloc   { flex: 0 0 12%;  min-width: 92px; }
 .sc-tbl-source  { flex: 0 0 8%;   min-width: 60px; }
@@ -214,7 +215,7 @@ $extra_head = <<<'CSS'
 @media(max-width:700px) {
   .sc-toolbar { margin: -1rem -1rem 1rem; }
   .tb-search input { width: 130px; }
-  .sc-tbl-moved, .sc-tbl-source { display: none; }
+  .sc-tbl-moved, .sc-tbl-size, .sc-tbl-source { display: none; }
 }
 </style>
 CSS;
@@ -332,6 +333,7 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     <div class="sc-tbl-cell sc-tbl-loc sort-col" data-sort="location" onclick="doSort('location')">
       Location <span class="th-arrow">↑</span>
     </div>
+    <div class="sc-tbl-cell sc-tbl-size">Size</div>
     <div class="sc-tbl-cell sc-tbl-moved sort-col" data-sort="moved" onclick="doSort('moved')">
       Moved <span class="th-arrow">↑</span>
     </div>
@@ -401,6 +403,11 @@ layout_start('Tracked Media', 'tracked', $extra_head);
       <?php else: ?>
         <span style="color:var(--muted);font-weight:700;font-size:.82rem">Slow</span>
       <?php endif; ?>
+    </div>
+
+    <div class="sc-tbl-cell sc-tbl-size" style="font-size:.78rem;color:var(--muted)">
+      <?php $sz = $row['size_on_disk'] ?? null;
+            echo ($sz && $sz > 0) ? number_format($sz / (1024**3), 2) . ' GiB' : '—'; ?>
     </div>
 
     <div class="sc-tbl-cell sc-tbl-moved" style="font-size:.78rem;color:var(--muted)">

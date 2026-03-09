@@ -156,6 +156,29 @@ layout_start('Queue', 'queue', $extra_head);
             &nbsp;&rarr;&nbsp;
             <?= htmlspecialchars($to_fast ? ($item['dst'] ?? '') : ($item['src'] ?? '')) ?>
           </div>
+          <?php if ($status === 'moving' && isset($item['progress_pct'])):
+            $pct       = max(0, min(100, (int)$item['progress_pct']));
+            $done_b    = (int)($item['bytes_done']  ?? 0);
+            $total_b   = (int)($item['total_bytes'] ?? 0);
+            $speed     = $item['speed'] ?? '';
+            $done_gib  = $done_b  / (1024 ** 3);
+            $total_gib = $total_b / (1024 ** 3);
+          ?>
+          <div style="margin-top:5px;max-width:340px">
+            <div style="width:100%;height:3px;background:rgba(255,255,255,.1);border-radius:2px;margin-bottom:3px">
+              <div style="width:<?= $pct ?>%;height:100%;background:var(--accent);border-radius:2px"></div>
+            </div>
+            <span style="font-size:.68rem;color:var(--muted)">
+              <?= $pct ?>%
+              <?php if ($total_b > 0): ?>
+                &nbsp;·&nbsp; <?= number_format($done_gib, 2) ?> / <?= number_format($total_gib, 2) ?> GiB
+              <?php endif; ?>
+              <?php if ($speed): ?>
+                &nbsp;·&nbsp; <?= htmlspecialchars($speed) ?>
+              <?php endif; ?>
+            </span>
+          </div>
+          <?php endif; ?>
         </td>
         <td>
           <span class="badge <?= $svc === 'radarr' ? '' : 'badge-muted' ?>"

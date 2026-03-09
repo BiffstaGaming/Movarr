@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,7 @@ def setup_logger() -> logging.Logger:
 class QueueWriter:
     def __init__(self):
         # Always start a fresh run entry for manual moves
+        self._lock = threading.Lock()
         self.data = {
             'run_id':    datetime.now().strftime('%Y%m%d_%H%M%S'),
             'started':   datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -90,15 +92,26 @@ class QueueWriter:
             done_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         self._write()
 
+    def update_progress(self, idx: int, pct: int, bytes_done: int,
+                        total_bytes: int, speed: str = '') -> None:
+        item = self.data['items'][idx]
+        item['progress_pct']  = pct
+        item['bytes_done']    = bytes_done
+        item['total_bytes']   = total_bytes
+        if speed:
+            item['speed'] = speed
+        self._write()
+
     def finish(self) -> None:
         self.data['completed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self._write()
 
     def _write(self) -> None:
-        try:
-            QUEUE_FILE.write_text(json.dumps(self.data, indent=2))
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                QUEUE_FILE.write_text(json.dumps(self.data, indent=2))
+            except Exception:
+                pass
 
 
 # -- Settings ------------------------------------------------------------------
@@ -173,6 +186,7 @@ def db_migrate(db: sqlite3.Connection) -> None:
         "ALTER TABLE move_history  ADD COLUMN time_taken   INTEGER DEFAULT NULL",
         "ALTER TABLE move_history  ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
         "ALTER TABLE pending_moves ADD COLUMN title        TEXT    NOT NULL DEFAULT ''",
+        "ALTER TABLE tracked_media ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
     ]:
         try:
             db.execute(sql)
@@ -216,14 +230,15 @@ def db_record_history(db: sqlite3.Connection, media_type: str, title: str,
 
 def db_upsert(db: sqlite3.Connection, media_type: str, title: str,
               external_id: int, service: str, mapping_id: str, folder: str,
-              location: str, source: str, notes: str, relocate_after) -> None:
+              location: str, source: str, notes: str, relocate_after,
+              size_on_disk: int = None) -> None:
     now = int(time.time())
     db.execute("""
         INSERT INTO tracked_media
             (media_type, title, external_id, service, mapping_id, folder,
              current_location, moved_at, relocate_after, source, notes,
-             created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             size_on_disk, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(external_id, service, mapping_id) DO UPDATE SET
             title            = excluded.title,
             folder           = excluded.folder,
@@ -232,21 +247,53 @@ def db_upsert(db: sqlite3.Connection, media_type: str, title: str,
             relocate_after   = excluded.relocate_after,
             source           = excluded.source,
             notes            = excluded.notes,
+            size_on_disk     = excluded.size_on_disk,
             updated_at       = excluded.updated_at
     """, (media_type, title, external_id, service, mapping_id, folder,
-          location, now, relocate_after, source, notes, now, now))
+          location, now, relocate_after, source, notes, size_on_disk, now, now))
     db.commit()
+
+
+# -- Progress monitor ----------------------------------------------------------
+
+def _watch_progress(dst: Path, total_bytes: int, stop_evt: threading.Event,
+                    update_fn, interval: float = 3.0) -> None:
+    """Background thread: polls dst size and calls update_fn(pct, done, speed)."""
+    last_bytes = 0
+    last_time  = time.time()
+    while not stop_evt.wait(interval):
+        done = folder_size_bytes(dst)
+        now  = time.time()
+        pct  = min(99, int(done * 100 / total_bytes)) if total_bytes > 0 else 0
+        dt   = now - last_time
+        speed_str = ''
+        if dt > 0:
+            bps = (done - last_bytes) / dt
+            if   bps >= 1024 ** 3: speed_str = f'{bps/1024**3:.1f} GB/s'
+            elif bps >= 1024 ** 2: speed_str = f'{bps/1024**2:.1f} MB/s'
+            elif bps >= 1024:      speed_str = f'{bps/1024:.1f} KB/s'
+        last_bytes, last_time = done, now
+        update_fn(pct, done, speed_str)
 
 
 # -- rsync move ----------------------------------------------------------------
 
-def rsync_move(src: Path, dst: Path, log: logging.Logger) -> tuple:
+def rsync_move(src: Path, dst: Path, log: logging.Logger,
+               size_bytes: int = 0, progress_cb=None) -> tuple:
     """rsync src/ into dst/ (always real), delete src on success. Returns (ok, summary)."""
     dst.mkdir(parents=True, exist_ok=True)
     cmd = ['rsync', '-av', '--checksum', str(src) + '/', str(dst) + '/']
     log.info('rsync  %s  ->  %s', src, dst)
 
+    stop_evt = threading.Event()
+    if progress_cb and size_bytes > 0:
+        t = threading.Thread(target=_watch_progress,
+                             args=(dst, size_bytes, stop_evt, progress_cb),
+                             daemon=True)
+        t.start()
+
     result = subprocess.run(cmd, capture_output=True, text=True)
+    stop_evt.set()
 
     summary = ''
     for line in reversed(result.stdout.splitlines()):
@@ -517,7 +564,8 @@ def main() -> None:
             db.commit()
             queue.start(q_idx)
             t_start = time.time()
-            ok, summary = rsync_move(src, dst, log)
+            cb = lambda pct, done, spd: queue.update_progress(q_idx, pct, done, size_bytes, spd)
+            ok, summary = rsync_move(src, dst, log, size_bytes, cb)
             t_taken = int(time.time() - t_start)
             if ok:
                 queue.done(q_idx, summary)
@@ -530,7 +578,8 @@ def main() -> None:
                                   'manual', svc_updated, plex_ok, notes,
                                   t_taken, size_bytes)
                 db_upsert(db, media_type, title, external_id, service,
-                          mapping_id, folder, new_location, 'manual', notes, relocate_after)
+                          mapping_id, folder, new_location, 'manual', notes, relocate_after,
+                          size_bytes)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
             else:
                 queue.error(q_idx, 'rsync failed')
@@ -577,7 +626,8 @@ def main() -> None:
             db.commit()
             queue.start(q_idx)
             t_start = time.time()
-            ok, summary = rsync_move(src, dst, log)
+            cb = lambda pct, done, spd: queue.update_progress(q_idx, pct, done, size_bytes, spd)
+            ok, summary = rsync_move(src, dst, log, size_bytes, cb)
             t_taken = int(time.time() - t_start)
             if ok:
                 queue.done(q_idx, summary)
@@ -590,7 +640,8 @@ def main() -> None:
                                   'manual', svc_updated, plex_ok, notes,
                                   t_taken, size_bytes)
                 db_upsert(db, media_type, title, external_id, service,
-                          mapping_id, folder, new_location, 'manual', notes, relocate_after)
+                          mapping_id, folder, new_location, 'manual', notes, relocate_after,
+                          size_bytes)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
             else:
                 queue.error(q_idx, 'rsync failed')
