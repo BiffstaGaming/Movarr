@@ -170,20 +170,36 @@ def db_migrate(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def folder_size_bytes(path) -> int:
+    """Return total byte size of all files under path, or 0 on error."""
+    total = 0
+    try:
+        for dirpath, _, filenames in os.walk(str(path)):
+            for f in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return total
+
+
 def db_record_history(db: sqlite3.Connection, media_type: str, title: str,
                       external_id: int, service: str, mapping_id: str, folder: str,
                       direction: str, src_path, dst_path, source: str,
-                      service_updated: bool, plex_refreshed: bool, notes: str) -> None:
+                      service_updated: bool, plex_refreshed: bool, notes: str,
+                      time_taken: int = None, size_on_disk: int = None) -> None:
     db.execute("""
         INSERT INTO move_history
             (media_type, title, external_id, service, mapping_id, folder,
              direction, src_path, dst_path, source, service_updated, plex_refreshed,
-             notes, moved_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             notes, moved_at, time_taken, size_on_disk)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (media_type, title, external_id, service, mapping_id, folder,
           direction, str(src_path), str(dst_path), source,
           1 if service_updated else 0, 1 if plex_refreshed else 0,
-          notes, int(time.time())))
+          notes, int(time.time()), time_taken, size_on_disk))
     db.commit()
 
 
@@ -484,8 +500,11 @@ def main() -> None:
                 db.commit()
                 continue
 
+            size_bytes = folder_size_bytes(src)
             queue.start(q_idx)
+            t_start = time.time()
             ok, summary = rsync_move(src, dst, log)
+            t_taken = int(time.time() - t_start)
             if ok:
                 queue.done(q_idx, summary)
                 svc_updated = update_sonarr_path(item, new_svc_path, settings, log)
@@ -494,7 +513,8 @@ def main() -> None:
                 plex_ok = notify_plex(settings, new_svc_path, log)
                 db_record_history(db, media_type, title, external_id, service,
                                   mapping_id, folder, direction, src, dst,
-                                  'manual', svc_updated, plex_ok, notes)
+                                  'manual', svc_updated, plex_ok, notes,
+                                  t_taken, size_bytes)
                 db_upsert(db, media_type, title, external_id, service,
                           mapping_id, folder, new_location, 'manual', notes, relocate_after)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
@@ -537,8 +557,11 @@ def main() -> None:
                 db.commit()
                 continue
 
+            size_bytes = folder_size_bytes(src)
             queue.start(q_idx)
+            t_start = time.time()
             ok, summary = rsync_move(src, dst, log)
+            t_taken = int(time.time() - t_start)
             if ok:
                 queue.done(q_idx, summary)
                 svc_updated = update_radarr_path(item, new_svc_path, settings, log)
@@ -547,7 +570,8 @@ def main() -> None:
                 plex_ok = notify_plex(settings, new_svc_path, log)
                 db_record_history(db, media_type, title, external_id, service,
                                   mapping_id, folder, direction, src, dst,
-                                  'manual', svc_updated, plex_ok, notes)
+                                  'manual', svc_updated, plex_ok, notes,
+                                  t_taken, size_bytes)
                 db_upsert(db, media_type, title, external_id, service,
                           mapping_id, folder, new_location, 'manual', notes, relocate_after)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))

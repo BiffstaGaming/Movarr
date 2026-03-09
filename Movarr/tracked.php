@@ -188,14 +188,14 @@ $extra_head = <<<'CSS'
   flex-shrink: 0;
 }
 /* Column widths */
-.sc-tbl-status  { width: 28px; }
-.sc-tbl-title   { flex: 1; min-width: 0; flex-shrink: 1; }
-.sc-tbl-type    { width: 70px; }
-.sc-tbl-loc     { width: 72px; }
-.sc-tbl-moved   { width: 100px; }
-.sc-tbl-reloc   { width: 170px; }
-.sc-tbl-source  { width: 80px; }
-.sc-tbl-actions { width: 160px; flex-shrink: 0; }
+.sc-tbl-status  { width: 24px; }
+.sc-tbl-title   { flex: 1; min-width: 0; flex-shrink: 1; max-width: 300px; }
+.sc-tbl-type    { width: 62px; }
+.sc-tbl-loc     { width: 56px; }
+.sc-tbl-moved   { width: 88px; }
+.sc-tbl-reloc   { width: 110px; }
+.sc-tbl-source  { width: 68px; }
+.sc-tbl-actions { width: 155px; flex-shrink: 0; }
 
 /* Sortable header cells */
 .sc-tbl-header .sort-col { cursor: pointer; user-select: none; }

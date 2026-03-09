@@ -176,20 +176,36 @@ def db_migrate(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def folder_size_bytes(path) -> int:
+    """Return total byte size of all files under path, or 0 on error."""
+    total = 0
+    try:
+        for dirpath, _, filenames in os.walk(str(path)):
+            for f in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return total
+
+
 def db_record_history(db: sqlite3.Connection, media_type: str, title: str,
                       external_id: int, service: str, mapping_id: str, folder: str,
                       direction: str, src_path, dst_path, source: str,
-                      service_updated: bool, plex_refreshed: bool, notes: str) -> None:
+                      service_updated: bool, plex_refreshed: bool, notes: str,
+                      time_taken: int = None, size_on_disk: int = None) -> None:
     db.execute("""
         INSERT INTO move_history
             (media_type, title, external_id, service, mapping_id, folder,
              direction, src_path, dst_path, source, service_updated, plex_refreshed,
-             notes, moved_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             notes, moved_at, time_taken, size_on_disk)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (media_type, title, external_id, service, mapping_id, folder,
           direction, str(src_path), str(dst_path), source,
           1 if service_updated else 0, 1 if plex_refreshed else 0,
-          notes, int(time.time())))
+          notes, int(time.time()), time_taken, size_on_disk))
     db.commit()
 
 
@@ -651,8 +667,11 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
             log.warning('Source not found on disk, skipping: %s', src)
             queue.skip(q_idx, 'Source not found on disk')
             return
+        size_bytes = folder_size_bytes(src)
         queue.start(q_idx)
+        t_start = time.time()
         ok, summary = rsync_move(src, dst, dry_run, log)
+        t_taken = int(time.time() - t_start)
         if ok:
             queue.done(q_idx, summary)
             if not dry_run:
@@ -664,7 +683,8 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
                 if tvdb_id:
                     db_record_history(db, 'show', series['title'], tvdb_id, 'sonarr',
                                       mapping_id, folder, direction, src, dst,
-                                      'auto', svc_updated, plex_ok, '')
+                                      'auto', svc_updated, plex_ok, '',
+                                      t_taken, size_bytes)
                     db_upsert(db, 'show', series['title'], tvdb_id, 'sonarr',
                               mapping_id, folder, location, 'auto', '', ra)
         else:
@@ -759,8 +779,11 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
             log.warning('Source not found on disk, skipping: %s', src)
             queue.skip(q_idx, 'Source not found on disk')
             return
+        size_bytes = folder_size_bytes(src)
         queue.start(q_idx)
+        t_start = time.time()
         ok, summary = rsync_move(src, dst, dry_run, log)
+        t_taken = int(time.time() - t_start)
         if ok:
             queue.done(q_idx, summary)
             if not dry_run:
@@ -772,7 +795,8 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
                 if tmdb_id:
                     db_record_history(db, 'movie', movie['title'], tmdb_id, 'radarr',
                                       mapping_id, folder, direction, src, dst,
-                                      'auto', svc_updated, plex_ok, '')
+                                      'auto', svc_updated, plex_ok, '',
+                                      t_taken, size_bytes)
                     db_upsert(db, 'movie', movie['title'], tmdb_id, 'radarr',
                               mapping_id, folder, location, 'auto', '', ra)
         else:

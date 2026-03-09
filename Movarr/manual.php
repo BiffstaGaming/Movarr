@@ -125,8 +125,9 @@ layout_start('Manual Move', 'manual');
 
         <div class="field-row" style="grid-template-columns:90px 1fr">
           <label id="id_label">TVDB ID</label>
-          <input type="number" name="external_id" id="external_id"
-                 placeholder="e.g. 305074" min="1" required>
+          <input type="text" name="external_id" id="external_id"
+                 inputmode="numeric" pattern="[0-9]+"
+                 placeholder="e.g. 305074" required>
         </div>
 
         <div class="field-row" style="grid-template-columns:90px 1fr">

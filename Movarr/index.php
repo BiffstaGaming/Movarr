@@ -395,13 +395,13 @@ $extra_head = <<<'CSS'
   flex-shrink: 0;
 }
 /* Column widths */
-.sc-tbl-title    { flex: 1; min-width: 0; flex-shrink: 1; }
-.sc-tbl-type     { width: 72px; }
-.sc-tbl-storage  { width: 72px; }
-.sc-tbl-movedate { width: 190px; }
-.sc-tbl-plays    { width: 64px; text-align: right; }
-.sc-tbl-viewers  { width: 70px; text-align: right; }
-.sc-tbl-date     { width: 120px; }
+.sc-tbl-title    { flex: 1; min-width: 0; flex-shrink: 1; max-width: 320px; }
+.sc-tbl-type     { width: 58px; }
+.sc-tbl-storage  { width: 58px; }
+.sc-tbl-movedate { width: 130px; }
+.sc-tbl-plays    { width: 52px; text-align: right; }
+.sc-tbl-viewers  { width: 64px; text-align: right; }
+.sc-tbl-date     { width: 88px; }
 /* Sortable header cells */
 .sc-tbl-header .sort-col { cursor: pointer; user-select: none; }
 .sc-tbl-header .sort-col:hover { color: var(--text); }
@@ -557,7 +557,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
       <div class="sc-modal-col">
         <label>
-          <input type="checkbox" id="col-movedate" checked onchange="saveCols()"> Expected Next Move Date
+          <input type="checkbox" id="col-movedate" checked onchange="saveCols()"> Expected Move Date
         </label>
       </div>
       <div class="sc-modal-col">
@@ -714,7 +714,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
         Storage <span class="th-arrow">↑</span>
       </div>
       <div class="sc-tbl-cell sc-tbl-movedate col-movedate sort-col" data-col="movedate" onclick="setSort('movedate',null)">
-        Expected Next Move Date
+        Expected Move Date
         <span class="th-info" title="The date this item is scheduled to be relocated between fast and slow storage. Only shown when a move has been recorded and a future relocation date is set.">ⓘ</span>
         <span class="th-arrow">↑</span>
       </div>
