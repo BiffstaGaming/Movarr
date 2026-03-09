@@ -93,9 +93,9 @@ function fmt_storage(?array $tr): string {
     return $tr['current_location'] === 'fast' ? 'Fast' : 'Slow';
 }
 function fmt_movedate(?array $tr): string {
-    if (!$tr) return '—';
-    if ($tr['relocate_after'] === null) return 'Pinned';
-    if ($tr['relocate_after'] < time()) return 'Expired';
+    // Only show a date if the item has been moved AND has a future relocate schedule
+    if (!$tr || !$tr['moved_at'] || $tr['relocate_after'] === null) return '—';
+    if ($tr['relocate_after'] < time()) return '—';
     return date('Y-m-d', $tr['relocate_after']);
 }
 function time_ago(int $ts): string {
@@ -130,31 +130,36 @@ $extra_head = <<<'CSS'
   gap: 0;
 }
 
-/* Toolbar button: icon on top, label below (exact Sonarr style) */
+/* Toolbar button: icon on top, label below — exact Sonarr PageToolbarButton spec */
 .sc-tb-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 0 12px;
-  min-width: 52px;
+  width: 60px;
+  height: 60px;
+  padding: 0;
   background: none;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: .6rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .06em;
   transition: color .15s, background .15s;
   position: relative;
-  white-space: nowrap;
   text-decoration: none;
+  flex-shrink: 0;
 }
 .sc-tb-btn:hover  { color: var(--text); background: rgba(255,255,255,.05); }
 .sc-tb-btn.active { color: var(--accent); }
 .sc-tb-btn svg    { flex-shrink: 0; }
+.sc-tb-btn .lbl {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding-top: 4px;
+  line-height: 1;
+  white-space: nowrap;
+}
 
 /* Small blue indicator dot (used on filter when active) */
 .sc-tb-indicator {
@@ -169,9 +174,11 @@ $extra_head = <<<'CSS'
 
 .sc-tb-sep {
   width: 1px;
-  background: var(--border);
-  margin: 10px 2px;
+  height: 40px;
+  background: rgba(255,255,255,.35);
+  margin: 0 20px;
   flex-shrink: 0;
+  align-self: center;
 }
 
 /* ── Dropdown menus (right-aligned, dark, Sonarr style) ── */
@@ -356,13 +363,53 @@ $extra_head = <<<'CSS'
 .ov-meta  { font-size:.75rem;color:var(--muted);margin-top:2px; }
 .ov-right { flex-shrink:0;text-align:right; }
 
-/* ── Table view ── */
+/* ── Sonarr-style flex table ── */
 #tbl-view { display: none; }
-#tbl-view table { font-size: .83rem; }
-#tbl-view thead th { cursor: pointer; user-select: none; }
-#tbl-view thead th:hover { color: var(--text); }
-#tbl-view thead th .th-sort { visibility: hidden; margin-left: 4px; }
-#tbl-view thead th.sort-active .th-sort { visibility: visible; }
+.sc-tbl { overflow: hidden; }
+.sc-tbl-header,
+.sc-tbl-row {
+  display: flex;
+  align-items: center;
+  height: 38px;
+}
+.sc-tbl-header {
+  border-bottom: 1px solid var(--border);
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.sc-tbl-row {
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  font-size: .875rem;
+  transition: background .1s;
+}
+.sc-tbl-row:last-child { border-bottom: none; }
+.sc-tbl-row:hover { background: rgba(255,255,255,.03); }
+.sc-tbl-cell {
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Column widths */
+.sc-tbl-title    { flex: 1; min-width: 0; flex-shrink: 1; }
+.sc-tbl-type     { width: 72px; }
+.sc-tbl-storage  { width: 72px; }
+.sc-tbl-movedate { width: 190px; }
+.sc-tbl-plays    { width: 64px; text-align: right; }
+.sc-tbl-viewers  { width: 70px; text-align: right; }
+.sc-tbl-date     { width: 120px; }
+/* Sortable header cells */
+.sc-tbl-header .sort-col { cursor: pointer; user-select: none; }
+.sc-tbl-header .sort-col:hover { color: var(--text); }
+.sc-tbl-header .sort-col.sort-active { color: var(--accent); }
+.th-arrow { visibility: hidden; margin-left: 3px; font-size: .68rem; }
+.sort-active .th-arrow { visibility: visible; }
+/* Info tooltip icon */
+.th-info { font-style: normal; font-size: .8rem; color: var(--muted); margin-left: 2px; cursor: help; }
 .storage-fast { color: var(--green); font-weight: 700; }
 .storage-slow { color: var(--muted); font-weight: 700; }
 /* Column visibility via dynamic <style> */
@@ -415,11 +462,10 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
 
     <!-- Options (column visibility) -->
     <button class="sc-tb-btn" id="btn-options" onclick="openOptions()" title="Options">
-      <svg id="options-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <!-- table icon (default, changes with view) -->
+      <svg id="options-icon" width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
         <path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-9 11H5v-2h6v2zm0-4H5V7h6v2zm8 4h-6v-2h6v2zm0-4h-6V7h6v2z"/>
       </svg>
-      Options
+      <span class="lbl">Options</span>
     </button>
 
     <div class="sc-tb-sep"></div>
@@ -427,10 +473,10 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
     <!-- View (eye icon) -->
     <div class="sc-menu-wrap">
       <button class="sc-tb-btn" onclick="toggleMenu('view-menu')" title="View">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
         </svg>
-        View
+        <span class="lbl">View</span>
       </button>
       <div class="sc-menu" id="view-menu">
         <button class="sc-menu-item selected" data-view="poster" onclick="setView('poster',this)">
@@ -448,10 +494,10 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
     <!-- Sort (bars icon) -->
     <div class="sc-menu-wrap">
       <button class="sc-tb-btn" onclick="toggleMenu('sort-menu')" title="Sort">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
           <path d="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z"/>
         </svg>
-        Sort
+        <span class="lbl">Sort</span>
       </button>
       <div class="sc-menu" id="sort-menu">
         <button class="sc-menu-item selected" data-sort="plays"   onclick="setSort('plays',this)">
@@ -476,10 +522,10 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
     <!-- Filter (funnel icon) -->
     <div class="sc-menu-wrap">
       <button class="sc-tb-btn" id="btn-filter" onclick="toggleMenu('filter-menu')" title="Filter">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
           <path d="M4.25 5.61C6.27 8.2 10 13 10 13v6c0 .55.45 1 1 1h2c.55 0 1-.45 1-1v-6s3.72-4.8 5.74-7.39A.998.998 0 0 0 18.95 4H5.04a1 1 0 0 0-.79 1.61z"/>
         </svg>
-        Filter
+        <span class="lbl">Filter</span>
         <span class="sc-tb-indicator"></span>
       </button>
       <div class="sc-menu" id="filter-menu" style="min-width:180px">
@@ -511,7 +557,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
       <div class="sc-modal-col">
         <label>
-          <input type="checkbox" id="col-movedate" checked onchange="saveCols()"> Expected Move Date
+          <input type="checkbox" id="col-movedate" checked onchange="saveCols()"> Expected Next Move Date
         </label>
       </div>
       <div class="sc-modal-col">
@@ -651,113 +697,102 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
   </div>
 </div><!-- #ov-view -->
 
-<!-- ── TABLE VIEW ── -->
+<!-- ── TABLE VIEW (Sonarr-style flex rows, no images) ── -->
 <div id="tbl-view">
   <?php if ($totalItems === 0): ?>
     <div class="empty">No media found for the last <?= $days ?> days.</div>
   <?php else: ?>
-  <div class="card">
-    <table id="main-table">
-      <thead>
-        <tr>
-          <th onclick="setSort('title',null)"   class="sort-col" data-col="title">Title <span class="th-sort">↑</span></th>
-          <th onclick="setSort('storage',null)" class="sort-col col-storage"  data-col="storage">Storage <span class="th-sort">↑</span></th>
-          <th onclick="setSort('movedate',null)"class="sort-col col-movedate" data-col="movedate">Move Date <span class="th-sort">↑</span></th>
-          <th onclick="setSort('plays',null)"   class="sort-col col-plays"    data-col="plays">Plays <span class="th-sort">↑</span></th>
-          <th onclick="setSort('viewers',null)" class="sort-col col-viewers"  data-col="viewers">Viewers <span class="th-sort">↑</span></th>
-          <th onclick="setSort('date',null)"    class="sort-col col-date"     data-col="date">Date <span class="th-sort">↑</span></th>
-        </tr>
-      </thead>
-      <tbody>
+  <div class="card sc-tbl" id="tbl-container">
 
-      <?php foreach ($tvShows as $showTitle => $info):
-        $tr = get_tracked($tracked_map, $showTitle);
-        $storage   = fmt_storage($tr);
-        $movedate  = fmt_movedate($tr);
-        $ts_move   = $tr ? (int)($tr['relocate_after'] ?? 0) : 0;
-        $ts_loc    = ($tr && $tr['current_location']==='fast') ? 1 : 0;
-      ?>
-      <tr data-title="<?= htmlspecialchars(strtolower($showTitle)) ?>"
-          data-type="show"
-          data-plays="<?= $info['plays'] ?>"
-          data-watched="<?= $info['last_watched'] ?>"
-          data-added="0"
-          data-storage="<?= $ts_loc ?>"
-          data-movedate="<?= $ts_move ?>">
-        <td>
-          <div style="display:flex;align-items:center;gap:.6rem">
-            <?php if ($info['rating_key']): ?>
-              <img style="width:28px;height:42px;object-fit:cover;border-radius:2px;flex-shrink:0"
-                src="<?= htmlspecialchars($tautulliUrl.'/api/v2?apikey='.$apiKey.'&cmd=pms_image_proxy&rating_key='.urlencode($info['rating_key']).'&width=56&height=84&fallback=poster') ?>"
-                alt="" loading="lazy" onerror="this.style.display='none'">
-            <?php endif; ?>
-            <div>
-              <div style="font-weight:600"><?= htmlspecialchars($showTitle) ?></div>
-              <div style="font-size:.72rem;color:var(--muted)">TV Show</div>
-            </div>
-          </div>
-        </td>
-        <td class="col-storage">
-          <?php if ($tr): ?>
-            <span class="<?= $tr['current_location']==='fast' ? 'storage-fast' : 'storage-slow' ?>">
-              <?= $tr['current_location']==='fast' ? '→ Fast' : '← Slow' ?>
-            </span>
-          <?php else: ?>
-            <span style="color:var(--muted)">—</span>
-          <?php endif; ?>
-        </td>
-        <td class="col-movedate" style="font-size:.82rem;color:var(--muted)"><?= htmlspecialchars($movedate) ?></td>
-        <td class="col-plays"   style="font-weight:700;color:var(--accent)"><?= $info['plays'] ?></td>
-        <td class="col-viewers" style="color:var(--muted)"><?= count($info['users']) ?></td>
-        <td class="col-date"    style="font-size:.82rem;color:var(--muted)"><?= time_ago($info['last_watched']) ?></td>
-      </tr>
-      <?php endforeach; ?>
+    <!-- Header -->
+    <div class="sc-tbl-header">
+      <div class="sc-tbl-cell sc-tbl-title sort-col" data-col="title" onclick="setSort('title',null)">
+        Title <span class="th-arrow">↑</span>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-type">Type</div>
+      <div class="sc-tbl-cell sc-tbl-storage col-storage sort-col" data-col="storage" onclick="setSort('storage',null)">
+        Storage <span class="th-arrow">↑</span>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-movedate col-movedate sort-col" data-col="movedate" onclick="setSort('movedate',null)">
+        Expected Next Move Date
+        <span class="th-info" title="The date this item is scheduled to be relocated between fast and slow storage. Only shown when a move has been recorded and a future relocation date is set.">ⓘ</span>
+        <span class="th-arrow">↑</span>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-plays col-plays sort-col" data-col="plays" onclick="setSort('plays',null)">
+        Plays <span class="th-arrow">↑</span>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-viewers col-viewers sort-col" data-col="viewers" onclick="setSort('viewers',null)">
+        Viewers <span class="th-arrow">↑</span>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-date col-date sort-col" data-col="date" onclick="setSort('date',null)">
+        Date <span class="th-arrow">↑</span>
+      </div>
+    </div>
 
-      <?php foreach ($movies as $movie):
-        $tr = get_tracked($tracked_map, $movie['title']);
-        $storage  = fmt_storage($tr);
-        $movedate = fmt_movedate($tr);
-        $ts_move  = $tr ? (int)($tr['relocate_after'] ?? 0) : 0;
-        $ts_loc   = ($tr && $tr['current_location']==='fast') ? 1 : 0;
-      ?>
-      <tr data-title="<?= htmlspecialchars(strtolower($movie['title'])) ?>"
-          data-type="movie"
-          data-plays="0"
-          data-watched="0"
-          data-added="<?= $movie['added_at'] ?>"
-          data-storage="<?= $ts_loc ?>"
-          data-movedate="<?= $ts_move ?>">
-        <td>
-          <div style="display:flex;align-items:center;gap:.6rem">
-            <?php if ($movie['thumb']): ?>
-              <img style="width:28px;height:42px;object-fit:cover;border-radius:2px;flex-shrink:0"
-                src="<?= htmlspecialchars($tautulliUrl.'/api/v2?apikey='.$apiKey.'&cmd=pms_image_proxy&img='.urlencode($movie['thumb']).'&width=56&height=84') ?>"
-                alt="" loading="lazy" onerror="this.style.display='none'">
-            <?php endif; ?>
-            <div>
-              <div style="font-weight:600"><?= htmlspecialchars($movie['title']) ?><?= $movie['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$movie['year'].')</span>' : '' ?></div>
-              <div style="font-size:.72rem;color:var(--muted)">Movie</div>
-            </div>
-          </div>
-        </td>
-        <td class="col-storage">
-          <?php if ($tr): ?>
-            <span class="<?= $tr['current_location']==='fast' ? 'storage-fast' : 'storage-slow' ?>">
-              <?= $tr['current_location']==='fast' ? '→ Fast' : '← Slow' ?>
-            </span>
-          <?php else: ?>
-            <span style="color:var(--muted)">—</span>
-          <?php endif; ?>
-        </td>
-        <td class="col-movedate" style="font-size:.82rem;color:var(--muted)"><?= htmlspecialchars($movedate) ?></td>
-        <td class="col-plays"   style="color:var(--muted)">—</td>
-        <td class="col-viewers" style="color:var(--muted)">—</td>
-        <td class="col-date"    style="font-size:.82rem;color:var(--muted)">Added <?= time_ago($movie['added_at']) ?></td>
-      </tr>
-      <?php endforeach; ?>
+    <!-- TV Show rows -->
+    <?php foreach ($tvShows as $showTitle => $info):
+      $tr = get_tracked($tracked_map, $showTitle);
+      $movedate  = fmt_movedate($tr);
+      $ts_move   = ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0;
+      $ts_loc    = ($tr && $tr['current_location']==='fast') ? 1 : 0;
+    ?>
+    <div class="sc-tbl-row"
+      data-title="<?= htmlspecialchars(strtolower($showTitle)) ?>"
+      data-type="show"
+      data-plays="<?= $info['plays'] ?>"
+      data-watched="<?= $info['last_watched'] ?>"
+      data-added="0"
+      data-storage="<?= $ts_loc ?>"
+      data-movedate="<?= $ts_move ?>">
+      <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600"><?= htmlspecialchars($showTitle) ?></div>
+      <div class="sc-tbl-cell sc-tbl-type"><span class="badge badge-muted" style="font-size:.68rem">TV</span></div>
+      <div class="sc-tbl-cell sc-tbl-storage col-storage">
+        <?php if ($tr): ?>
+          <span class="<?= $tr['current_location']==='fast' ? 'storage-fast' : 'storage-slow' ?>">
+            <?= $tr['current_location']==='fast' ? 'Fast' : 'Slow' ?>
+          </span>
+        <?php else: ?><span style="color:var(--muted)">—</span><?php endif; ?>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
+      <div class="sc-tbl-cell sc-tbl-plays col-plays" style="font-weight:700;color:var(--accent)"><?= $info['plays'] ?></div>
+      <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)"><?= count($info['users']) ?></div>
+      <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem"><?= time_ago($info['last_watched']) ?></div>
+    </div>
+    <?php endforeach; ?>
 
-      </tbody>
-    </table>
+    <!-- Movie rows -->
+    <?php foreach ($movies as $movie):
+      $tr = get_tracked($tracked_map, $movie['title']);
+      $movedate = fmt_movedate($tr);
+      $ts_move  = ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0;
+      $ts_loc   = ($tr && $tr['current_location']==='fast') ? 1 : 0;
+    ?>
+    <div class="sc-tbl-row"
+      data-title="<?= htmlspecialchars(strtolower($movie['title'])) ?>"
+      data-type="movie"
+      data-plays="0"
+      data-watched="0"
+      data-added="<?= $movie['added_at'] ?>"
+      data-storage="<?= $ts_loc ?>"
+      data-movedate="<?= $ts_move ?>">
+      <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600">
+        <?= htmlspecialchars($movie['title']) ?><?= $movie['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$movie['year'].')</span>' : '' ?>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-type"><span class="badge" style="font-size:.68rem;background:rgba(160,90,219,.12);color:#a05adb">Movie</span></div>
+      <div class="sc-tbl-cell sc-tbl-storage col-storage">
+        <?php if ($tr): ?>
+          <span class="<?= $tr['current_location']==='fast' ? 'storage-fast' : 'storage-slow' ?>">
+            <?= $tr['current_location']==='fast' ? 'Fast' : 'Slow' ?>
+          </span>
+        <?php else: ?><span style="color:var(--muted)">—</span><?php endif; ?>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
+      <div class="sc-tbl-cell sc-tbl-plays col-plays" style="color:var(--muted)">—</div>
+      <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)">—</div>
+      <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem">Added <?= time_ago($movie['added_at']) ?></div>
+    </div>
+    <?php endforeach; ?>
+
   </div>
   <?php endif; ?>
 </div><!-- #tbl-view -->
@@ -894,10 +929,10 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       if (el) el.textContent = sortDirs[k] ? '↑' : '↓';
     });
     // Update table header indicators
-    document.querySelectorAll('#main-table .sort-col').forEach(function(th) {
+    document.querySelectorAll('#tbl-view .sort-col').forEach(function(th) {
       var isActive = th.dataset.col === key;
       th.classList.toggle('sort-active', isActive);
-      var arrow = th.querySelector('.th-sort');
+      var arrow = th.querySelector('.th-arrow');
       if (arrow) arrow.textContent = sortDirs[key] ? '↑' : '↓';
     });
     closeAllMenus();
@@ -952,22 +987,24 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
 
   // ── Apply all ──
   function applyAll() {
-    var cards = [...posterView.querySelectorAll('.sc-card')];
-    var ovRows= [...ovView.querySelectorAll('.ov-row')];
-    var tblRows=[...document.querySelectorAll('#main-table tbody tr')];
+    var cards   = [...posterView.querySelectorAll('.sc-card')];
+    var ovRows  = [...ovView.querySelectorAll('.ov-row')];
+    var tblRows = [...document.querySelectorAll('#tbl-view .sc-tbl-row')];
 
-    // Sort cards and reorder
+    // Sort & reorder poster cards
     cards.sort(cmp).forEach(function(c) { posterView.appendChild(c); });
+    // Sort & reorder overview rows
     var ovCard = ovView.querySelector('.card');
     if (ovCard) ovRows.sort(cmp).forEach(function(r) { ovCard.appendChild(r); });
-    var tbody = document.querySelector('#main-table tbody');
-    if (tbody) tblRows.sort(cmp).forEach(function(r) { tbody.appendChild(r); });
+    // Sort & reorder flex table rows (header stays first, rows appended after)
+    var tblCont = document.getElementById('tbl-container');
+    if (tblCont) tblRows.sort(cmp).forEach(function(r) { tblCont.appendChild(r); });
 
     // Show/hide
     var n = 0;
     cards.forEach(function(c)   { var v=isVisible(c); c.style.display=v?'':  'none'; if(v)n++; });
     ovRows.forEach(function(r)  { r.style.display=isVisible(r)?'':'none'; });
-    tblRows.forEach(function(r) { r.style.display=isVisible(r)?'':'none'; });
+    tblRows.forEach(function(r) { r.style.display=isVisible(r)?'flex':'none'; });
 
     if (countEl) countEl.textContent = n;
   }
@@ -1011,10 +1048,10 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
     if (el) el.textContent = sortDirs[k] ? '↑' : '↓';
   });
   // Sync table headers
-  document.querySelectorAll('#main-table .sort-col').forEach(function(th) {
+  document.querySelectorAll('#tbl-view .sort-col').forEach(function(th) {
     var isActive = th.dataset.col === currentSort;
     th.classList.toggle('sort-active', isActive);
-    var arrow = th.querySelector('.th-sort');
+    var arrow = th.querySelector('.th-arrow');
     if (arrow) arrow.textContent = sortDirs[currentSort] ? '↑' : '↓';
   });
 

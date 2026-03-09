@@ -69,6 +69,13 @@ function db_migrate(PDO $db): void
             moved_at        INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
     ");
+    // Add new columns if they don't exist yet (idempotent migrations)
+    foreach ([
+        "ALTER TABLE move_history ADD COLUMN time_taken  INTEGER DEFAULT NULL",
+        "ALTER TABLE move_history ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (\PDOException $e) {}
+    }
 }
 
 /** Insert a pending manual move and return its id. */

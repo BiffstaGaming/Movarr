@@ -56,6 +56,8 @@ layout_start('History', 'history');
         <th>Source</th>
         <th style="text-align:center" title="Sonarr/Radarr path was updated successfully">Path Synced</th>
         <th style="text-align:center" title="Plex library refresh was triggered successfully">Plex Notified</th>
+        <th title="Time taken to complete the move">Time Taken</th>
+        <th title="Total data transferred, in GiB">Size (GiB)</th>
         <th>Date</th>
       </tr>
     </thead>
@@ -118,6 +120,31 @@ layout_start('History', 'history');
           <?php else: ?>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--muted)"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           <?php endif; ?>
+        </td>
+        <td style="font-size:.75rem;color:var(--muted);white-space:nowrap">
+          <?php
+            $tt = $row['time_taken'] ?? null;
+            if ($tt !== null && $tt > 0) {
+                $h = (int)floor($tt / 3600);
+                $m = (int)floor(($tt % 3600) / 60);
+                $sc = (int)($tt % 60);
+                if ($h > 0)      echo "{$h}h {$m}m";
+                elseif ($m > 0)  echo "{$m}m {$sc}s";
+                else             echo "{$sc}s";
+            } else {
+                echo '<span style="color:var(--muted)">—</span>';
+            }
+          ?>
+        </td>
+        <td style="font-size:.75rem;color:var(--muted);white-space:nowrap">
+          <?php
+            $sz = $row['size_on_disk'] ?? null;
+            if ($sz !== null && $sz > 0) {
+                echo number_format($sz / (1024**3), 2);
+            } else {
+                echo '<span style="color:var(--muted)">—</span>';
+            }
+          ?>
         </td>
         <td style="font-size:.75rem;color:var(--muted);white-space:nowrap">
           <?= date('Y-m-d H:i', $row['moved_at']) ?>
