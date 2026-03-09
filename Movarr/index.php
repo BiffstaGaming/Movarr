@@ -365,7 +365,7 @@ $extra_head = <<<'CSS'
 
 /* ── Sonarr-style flex table ── */
 #tbl-view { display: none; }
-.sc-tbl { overflow: hidden; }
+.sc-tbl { overflow-x: auto; }
 .sc-tbl-header,
 .sc-tbl-row {
   display: flex;
@@ -394,14 +394,14 @@ $extra_head = <<<'CSS'
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Column widths */
-.sc-tbl-title    { flex: 1; min-width: 0; flex-shrink: 1; max-width: 320px; }
-.sc-tbl-type     { width: 58px; }
-.sc-tbl-storage  { width: 58px; }
-.sc-tbl-movedate { width: 130px; }
-.sc-tbl-plays    { width: 52px; text-align: right; }
-.sc-tbl-viewers  { width: 64px; text-align: right; }
-.sc-tbl-date     { width: 88px; }
+/* Column widths — % with min-width so nothing truncates */
+.sc-tbl-title    { flex: 1 1 auto; min-width: 140px; }
+.sc-tbl-type     { flex: 0 0 7%;  min-width: 52px; }
+.sc-tbl-storage  { flex: 0 0 8%;  min-width: 56px; }
+.sc-tbl-movedate { flex: 0 0 14%; min-width: 105px; }
+.sc-tbl-plays    { flex: 0 0 7%;  min-width: 50px; text-align: right; }
+.sc-tbl-viewers  { flex: 0 0 8%;  min-width: 56px; text-align: right; }
+.sc-tbl-date     { flex: 0 0 10%; min-width: 72px; }
 /* Sortable header cells */
 .sc-tbl-header .sort-col { cursor: pointer; user-select: none; }
 .sc-tbl-header .sort-col:hover { color: var(--text); }

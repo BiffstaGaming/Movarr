@@ -37,7 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
             // Optionally resolve title from Sonarr/Radarr now so the UI looks nice
             $title = resolve_title($s, $service, $ext_id);
 
-            db_queue_move($db, $ext_id, $service, $mapping_id, $direction, $notes);
+            db_queue_move($db, $ext_id, $service, $mapping_id, $direction, $notes, $title ?? '');
             // Write the MANUAL trigger — runs manual_move.py only, ignores dry-run
             file_put_contents(manual_trigger_file(), date('c'));
 

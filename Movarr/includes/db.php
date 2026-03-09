@@ -46,6 +46,7 @@ function db_migrate(PDO $db): void
             service      TEXT    NOT NULL,
             mapping_id   TEXT    NOT NULL,
             direction    TEXT    NOT NULL,
+            title        TEXT    NOT NULL DEFAULT '',
             notes        TEXT    DEFAULT '',
             requested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
             status       TEXT    NOT NULL DEFAULT 'pending'
@@ -71,8 +72,9 @@ function db_migrate(PDO $db): void
     ");
     // Add new columns if they don't exist yet (idempotent migrations)
     foreach ([
-        "ALTER TABLE move_history ADD COLUMN time_taken  INTEGER DEFAULT NULL",
-        "ALTER TABLE move_history ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
+        "ALTER TABLE move_history   ADD COLUMN time_taken  INTEGER DEFAULT NULL",
+        "ALTER TABLE move_history   ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
+        "ALTER TABLE pending_moves  ADD COLUMN title TEXT NOT NULL DEFAULT ''",
     ] as $sql) {
         try { $db->exec($sql); } catch (\PDOException $e) {}
     }
@@ -80,13 +82,14 @@ function db_migrate(PDO $db): void
 
 /** Insert a pending manual move and return its id. */
 function db_queue_move(PDO $db, int $external_id, string $service,
-                       string $mapping_id, string $direction, string $notes = ''): int
+                       string $mapping_id, string $direction, string $notes = '',
+                       string $title = ''): int
 {
     $stmt = $db->prepare(
-        'INSERT INTO pending_moves (external_id, service, mapping_id, direction, notes, requested_at, status)
-         VALUES (?, ?, ?, ?, ?, ?, \'pending\')'
+        'INSERT INTO pending_moves (external_id, service, mapping_id, direction, title, notes, requested_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, \'pending\')'
     );
-    $stmt->execute([$external_id, $service, $mapping_id, $direction, $notes, time()]);
+    $stmt->execute([$external_id, $service, $mapping_id, $direction, $title, $notes, time()]);
     return (int)$db->lastInsertId();
 }
 

@@ -144,6 +144,7 @@ def db_migrate(db: sqlite3.Connection) -> None:
             service      TEXT    NOT NULL,
             mapping_id   TEXT    NOT NULL,
             direction    TEXT    NOT NULL,
+            title        TEXT    NOT NULL DEFAULT '',
             notes        TEXT    DEFAULT '',
             requested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
             status       TEXT    NOT NULL DEFAULT 'pending'
@@ -167,6 +168,16 @@ def db_migrate(db: sqlite3.Connection) -> None:
             moved_at        INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
     """)
+    # Idempotent column additions for existing databases
+    for sql in [
+        "ALTER TABLE move_history  ADD COLUMN time_taken   INTEGER DEFAULT NULL",
+        "ALTER TABLE move_history  ADD COLUMN size_on_disk INTEGER DEFAULT NULL",
+        "ALTER TABLE pending_moves ADD COLUMN title        TEXT    NOT NULL DEFAULT ''",
+    ]:
+        try:
+            db.execute(sql)
+        except Exception:
+            pass
     db.commit()
 
 
@@ -501,6 +512,9 @@ def main() -> None:
                 continue
 
             size_bytes = folder_size_bytes(src)
+            # Mark as processing so the queue page shows the queue.json entry instead
+            db.execute("UPDATE pending_moves SET status='processing' WHERE id=?", (pm_id,))
+            db.commit()
             queue.start(q_idx)
             t_start = time.time()
             ok, summary = rsync_move(src, dst, log)
@@ -558,6 +572,9 @@ def main() -> None:
                 continue
 
             size_bytes = folder_size_bytes(src)
+            # Mark as processing so the queue page shows the queue.json entry instead
+            db.execute("UPDATE pending_moves SET status='processing' WHERE id=?", (pm_id,))
+            db.commit()
             queue.start(q_idx)
             t_start = time.time()
             ok, summary = rsync_move(src, dst, log)

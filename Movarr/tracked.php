@@ -158,7 +158,7 @@ $extra_head = <<<'CSS'
 .sc-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
 
 /* ── Sonarr-style flex table ── */
-.sc-tbl { overflow: hidden; }
+.sc-tbl { overflow-x: auto; }
 .sc-tbl-header,
 .sc-tbl-row {
   display: flex;
@@ -187,15 +187,15 @@ $extra_head = <<<'CSS'
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Column widths */
-.sc-tbl-status  { width: 24px; }
-.sc-tbl-title   { flex: 1; min-width: 0; flex-shrink: 1; max-width: 300px; }
-.sc-tbl-type    { width: 62px; }
-.sc-tbl-loc     { width: 56px; }
-.sc-tbl-moved   { width: 88px; }
-.sc-tbl-reloc   { width: 110px; }
-.sc-tbl-source  { width: 68px; }
-.sc-tbl-actions { width: 155px; flex-shrink: 0; }
+/* Column widths — % with min-width so nothing truncates */
+.sc-tbl-status  { flex: 0 0 24px; }
+.sc-tbl-title   { flex: 1 1 auto; min-width: 120px; }
+.sc-tbl-type    { flex: 0 0 7%;   min-width: 52px; }
+.sc-tbl-loc     { flex: 0 0 7%;   min-width: 52px; }
+.sc-tbl-moved   { flex: 0 0 10%;  min-width: 82px; }
+.sc-tbl-reloc   { flex: 0 0 12%;  min-width: 92px; }
+.sc-tbl-source  { flex: 0 0 8%;   min-width: 60px; }
+.sc-tbl-actions { flex: 0 0 155px; }
 
 /* Sortable header cells */
 .sc-tbl-header .sort-col { cursor: pointer; user-select: none; }

@@ -1,29 +1,48 @@
 <?php
 require_once __DIR__ . '/includes/settings.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/db.php';
 
+// ── queue.json ────────────────────────────────────────────────────────────────
 $qf   = queue_file();
 $data = null;
-
 if (file_exists($qf)) {
     $raw = json_decode(file_get_contents($qf), true);
     if (is_array($raw)) $data = $raw;
 }
 
-// Active = any item in pending or moving state
-$active_items = [];
+// Active items from queue.json (pending/moving)
+$json_items = [];
 foreach (($data['items'] ?? []) as $item) {
     $s = $item['status'] ?? '';
     if ($s === 'pending' || $s === 'moving') {
-        $active_items[] = $item;
+        $json_items[] = $item;
     }
 }
 
-$is_running = !empty($active_items);
-$extra_head = $is_running ? '<meta http-equiv="refresh" content="3">' : '';
+// ── DB pending manual moves ───────────────────────────────────────────────────
+$s = load_settings();
+$map_names = [];
+foreach ($s['path_mappings'] ?? [] as $m) {
+    $map_names[$m['id']] = $m['name'] ?: $m['id'];
+}
+
+$db_pending = [];
+try {
+    $db = db_connect();
+    $db_pending = $db->query("SELECT * FROM pending_moves WHERE status='pending' ORDER BY requested_at ASC")
+                     ->fetchAll();
+} catch (Exception $e) {}
+
+// Combine: DB pending (Queued) first, then json items (active/moving)
+$has_anything = !empty($db_pending) || !empty($json_items);
+$is_running   = !empty($json_items);
 
 $mode_labels  = ['real' => 'Real', 'dry_run' => 'Dry Run', 'list_only' => 'List Only'];
 $mode_classes = ['real' => 'badge-red', 'dry_run' => 'badge-blue', 'list_only' => 'badge-muted'];
+
+// Auto-refresh if there's anything active
+$extra_head = ($has_anything) ? '<meta http-equiv="refresh" content="4">' : '';
 
 layout_start('Queue', 'queue', $extra_head);
 ?>
@@ -34,19 +53,27 @@ layout_start('Queue', 'queue', $extra_head);
   <span class="dot dot-amber"></span>
   <span style="font-size:.85rem;font-weight:600;color:var(--accent)">Transfer in progress</span>
   <span style="font-size:.75rem;color:var(--muted);margin-left:.25rem">
-    <?= count($active_items) ?> item<?= count($active_items) !== 1 ? 's' : '' ?> remaining
+    <?= count($json_items) ?> item<?= count($json_items) !== 1 ? 's' : '' ?> active
   </span>
   <?php if ($data && isset($data['mode'])): ?>
   <span class="badge <?= $mode_classes[$data['mode']] ?? 'badge-muted' ?>" style="margin-left:.25rem">
     <?= htmlspecialchars($mode_labels[$data['mode']] ?? $data['mode']) ?>
   </span>
   <?php endif; ?>
-  <span style="font-size:.7rem;color:var(--muted);margin-left:auto">Auto-refreshing every 3s</span>
+  <span style="font-size:.7rem;color:var(--muted);margin-left:auto">Auto-refreshing every 4s</span>
+</div>
+<?php elseif (!empty($db_pending)): ?>
+<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:1rem;padding:.5rem .75rem;background:rgba(80,80,200,.07);border:1px solid rgba(100,120,220,.18);border-radius:4px;">
+  <span class="dot dot-muted"></span>
+  <span style="font-size:.85rem;font-weight:600;color:var(--muted)">
+    <?= count($db_pending) ?> manual move<?= count($db_pending) !== 1 ? 's' : '' ?> queued — waiting for mover to run
+  </span>
+  <span style="font-size:.7rem;color:var(--muted);margin-left:auto">Auto-refreshing every 4s</span>
 </div>
 <?php endif; ?>
 
 <div class="card">
-  <?php if (empty($active_items)): ?>
+  <?php if (!$has_anything): ?>
     <div class="empty">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="margin-bottom:.75rem;color:var(--muted)"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
       <div>No active transfers</div>
@@ -65,11 +92,51 @@ layout_start('Queue', 'queue', $extra_head);
         <th>Direction</th>
         <th>Mapping</th>
         <th>Status</th>
-        <th>Started</th>
+        <th>Queued / Started</th>
       </tr>
     </thead>
     <tbody>
-      <?php foreach ($active_items as $item):
+
+      <!-- DB pending manual moves (waiting for mover to pick up) -->
+      <?php foreach ($db_pending as $pm):
+        $to_fast = $pm['direction'] === 'to_fast';
+        $svc     = $pm['service'];
+        $title   = $pm['title'] ?: ($svc === 'sonarr' ? 'TVDB ' : 'TMDB ') . $pm['external_id'];
+        $mapname = $map_names[$pm['mapping_id']] ?? $pm['mapping_id'];
+      ?>
+      <tr>
+        <td><span class="dot dot-muted"></span></td>
+        <td>
+          <div style="font-weight:600;font-size:.875rem"><?= htmlspecialchars($title) ?></div>
+          <div style="font-size:.7rem;color:var(--muted)">
+            <?= htmlspecialchars($svc === 'sonarr' ? 'TVDB' : 'TMDB') ?>
+            <?= (int)$pm['external_id'] ?>
+            <?php if ($pm['notes']): ?>
+              &nbsp;·&nbsp; <?= htmlspecialchars($pm['notes']) ?>
+            <?php endif; ?>
+          </div>
+        </td>
+        <td>
+          <span class="badge <?= $svc === 'radarr' ? '' : 'badge-muted' ?>"
+            <?= $svc === 'radarr' ? 'style="background:rgba(160,90,219,.15);color:#a05adb"' : '' ?>>
+            <?= htmlspecialchars(ucfirst($svc)) ?>
+          </span>
+        </td>
+        <td>
+          <?php if ($to_fast): ?>
+            <span style="color:var(--green);font-weight:700;font-size:.8rem">&#8594; Fast</span>
+          <?php else: ?>
+            <span style="color:var(--muted);font-weight:700;font-size:.8rem">&#8592; Slow</span>
+          <?php endif; ?>
+        </td>
+        <td style="color:var(--muted);font-size:.8rem"><?= htmlspecialchars($mapname) ?></td>
+        <td><span class="badge badge-muted">Pending</span></td>
+        <td style="font-size:.75rem;color:var(--muted)"><?= date('Y-m-d H:i', $pm['requested_at']) ?></td>
+      </tr>
+      <?php endforeach; ?>
+
+      <!-- queue.json items (actively being processed) -->
+      <?php foreach ($json_items as $item):
         $status  = $item['status'] ?? 'pending';
         $to_fast = ($item['direction'] ?? '') === 'to_fast';
         $svc     = $item['service'] ?? 'sonarr';
@@ -114,6 +181,7 @@ layout_start('Queue', 'queue', $extra_head);
         <td style="font-size:.75rem;color:var(--muted)"><?= htmlspecialchars($item['started_at'] ?? '—') ?></td>
       </tr>
       <?php endforeach; ?>
+
     </tbody>
   </table>
   <?php endif; ?>
