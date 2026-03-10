@@ -32,8 +32,9 @@ CONFIG_DIR    = Path(os.getenv('CONFIG_PATH', '/config'))
 SETTINGS_FILE = CONFIG_DIR / 'settings.json'
 LOG_FILE      = CONFIG_DIR / 'mover.log'
 QUEUE_FILE    = CONFIG_DIR / 'queue.json'
-DB_FILE       = CONFIG_DIR / 'movarr.db'
-HEALTH_FILE   = CONFIG_DIR / 'health.json'
+DB_FILE         = CONFIG_DIR / 'movarr.db'
+HEALTH_FILE     = CONFIG_DIR / 'health.json'
+DISK_USAGE_FILE = CONFIG_DIR / 'disk_usage.json'
 
 
 # -- Logging -------------------------------------------------------------------
@@ -259,6 +260,53 @@ def _fmt_bytes(b: int) -> str:
     if b >= 1_048_576:
         return f'{b / 1_048_576:.1f} MB'
     return f'{b} B'
+
+
+def write_disk_usage(settings: dict, log: logging.Logger) -> None:
+    """Probe disk usage for all configured mover paths and write to disk_usage.json.
+
+    Deduplicates by device ID so that slow and fast paths on the same filesystem
+    are shown as a single entry (with both labels).
+    """
+    drives: list = []
+    seen:   dict = {}  # st_dev -> index in drives
+
+    for m in settings.get('path_mappings', []):
+        mapping_name = m.get('name', m.get('id', 'unnamed'))
+        for field, tier in [('slow_path_mover', 'Slow'), ('fast_path_mover', 'Fast')]:
+            path = m.get(field, '').strip()
+            if not path:
+                continue
+            check = Path(path)
+            while not check.exists() and check != check.parent:
+                check = check.parent
+            if not check.exists():
+                continue
+            try:
+                dev_id = os.stat(str(check)).st_dev
+                usage  = shutil.disk_usage(str(check))
+            except Exception:
+                continue
+            label = f'{mapping_name} ({tier})'
+            if dev_id in seen:
+                drives[seen[dev_id]]['extra_labels'].append(label)
+            else:
+                seen[dev_id] = len(drives)
+                drives.append({
+                    'label':        label,
+                    'extra_labels': [],
+                    'path':         path,
+                    'total_bytes':  usage.total,
+                    'free_bytes':   usage.free,
+                    'used_bytes':   usage.used,
+                })
+
+    data = {'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'drives': drives}
+    try:
+        DISK_USAGE_FILE.write_text(json.dumps(data, indent=2))
+        log.debug('Disk usage written: %d drive(s)', len(drives))
+    except Exception as exc:
+        log.warning('Failed to write disk usage: %s', exc)
 
 
 def preflight_disk(dst_base: Path, size_bytes: int, title: str,
@@ -962,6 +1010,8 @@ def main() -> None:
     except Exception as exc:
         log.error('Failed to load settings: %s', exc)
         sys.exit(1)
+
+    write_disk_usage(settings, log)
 
     dry_run   = settings.get('dry_run', True)
     list_only = settings.get('list_only', False)

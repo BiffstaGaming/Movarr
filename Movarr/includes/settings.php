@@ -19,6 +19,7 @@ function log_file(): string            { return config_base() . '/mover.log'; }
 function queue_file(): string          { return config_base() . '/queue.json'; }
 function db_file(): string             { return config_base() . '/movarr.db'; }
 function health_file(): string         { return config_base() . '/health.json'; }
+function disk_usage_file(): string     { return config_base() . '/disk_usage.json'; }
 
 function load_settings(): array {
     $defaults = [

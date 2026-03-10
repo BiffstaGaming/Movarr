@@ -12,6 +12,8 @@ Scheduler for the mover.
 
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -24,12 +26,11 @@ try:
 except ImportError:
     HAS_CRONITER = False
 
-CONFIG_DIR    = Path(__file__).parent.parent / 'config'  # overridden by env
-import os
-CONFIG_DIR    = Path(os.getenv('CONFIG_PATH', '/config'))
+CONFIG_DIR          = Path(os.getenv('CONFIG_PATH', '/config'))
 TRIGGER_FILE        = CONFIG_DIR / '.trigger'
 MANUAL_TRIGGER_FILE = CONFIG_DIR / '.manual_trigger'
 SETTINGS_FILE       = CONFIG_DIR / 'settings.json'
+DISK_USAGE_FILE     = CONFIG_DIR / 'disk_usage.json'
 MOVER_SCRIPT        = Path(__file__).parent / 'mover.py'
 MANUAL_SCRIPT       = Path(__file__).parent / 'manual_move.py'
 
@@ -40,6 +41,54 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger('scheduler')
+
+
+def write_disk_usage() -> None:
+    """Probe disk usage for all configured mover paths and write to disk_usage.json."""
+    try:
+        with open(SETTINGS_FILE) as f:
+            settings = json.load(f)
+    except Exception:
+        return
+
+    drives: list = []
+    seen:   dict = {}  # st_dev -> index in drives
+
+    for m in settings.get('path_mappings', []):
+        mapping_name = m.get('name', m.get('id', 'unnamed'))
+        for field, tier in [('slow_path_mover', 'Slow'), ('fast_path_mover', 'Fast')]:
+            path = m.get(field, '').strip()
+            if not path:
+                continue
+            check = Path(path)
+            while not check.exists() and check != check.parent:
+                check = check.parent
+            if not check.exists():
+                continue
+            try:
+                dev_id = os.stat(str(check)).st_dev
+                usage  = shutil.disk_usage(str(check))
+            except Exception:
+                continue
+            label = f'{mapping_name} ({tier})'
+            if dev_id in seen:
+                drives[seen[dev_id]]['extra_labels'].append(label)
+            else:
+                seen[dev_id] = len(drives)
+                drives.append({
+                    'label':        label,
+                    'extra_labels': [],
+                    'path':         path,
+                    'total_bytes':  usage.total,
+                    'free_bytes':   usage.free,
+                    'used_bytes':   usage.used,
+                })
+
+    data = {'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'drives': drives}
+    try:
+        DISK_USAGE_FILE.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
 
 
 def load_cron() -> str:
@@ -101,6 +150,7 @@ def check_config_writable() -> None:
 def main() -> None:
     log.info("Scheduler started")
     check_config_writable()
+    write_disk_usage()
     if not HAS_CRONITER:
         log.warning("croniter not installed — falling back to daily 03:00 schedule")
 
@@ -135,6 +185,7 @@ def main() -> None:
             next_run = next_run_time(cron_expr)
             log.info(f"Next scheduled run: {next_run:%Y-%m-%d %H:%M:%S}")
 
+        write_disk_usage()
         time.sleep(30)
 
 

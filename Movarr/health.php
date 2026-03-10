@@ -27,7 +27,7 @@ if (file_exists($hf)) {
     $health_issues = json_decode(file_get_contents($hf), true) ?: [];
 }
 
-// ── Collect disk info for configured mover paths ──────────────────────────────
+// ── Load disk usage written by the mover service container ────────────────────
 function fmt_bytes(int $bytes): string {
     if ($bytes >= 1099511627776) return round($bytes / 1099511627776, 1) . ' TB';
     if ($bytes >= 1073741824)    return round($bytes / 1073741824, 1)    . ' GB';
@@ -35,34 +35,23 @@ function fmt_bytes(int $bytes): string {
     return $bytes . ' B';
 }
 
-$disks = [];
-$seen  = [];  // deduplicate by total size (proxy for unique filesystem)
+$disks        = [];
+$disk_updated = null;
+$du_file      = disk_usage_file();
 
-foreach ($s['path_mappings'] as $m) {
-    foreach (['slow_path_mover' => 'Slow', 'fast_path_mover' => 'Fast'] as $field => $tier) {
-        $path = trim($m[$field] ?? '');
-        if ($path === '') continue;
-        // Use the first existing ancestor directory
-        $check = $path;
-        while ($check !== '' && $check !== '/' && $check !== '.' && !is_dir($check)) {
-            $check = dirname($check);
-        }
-        if (!is_dir($check)) continue;
-
-        $total = @disk_total_space($check);
-        $free  = @disk_free_space($check);
-        if ($total === false || $total === 0) continue;
-
-        $key = (string)$total; // same total = same filesystem
-        if (isset($seen[$key])) continue;
-        $seen[$key] = true;
-
-        $used    = $total - $free;
-        $pct     = round($used / $total * 100);
-        $label   = htmlspecialchars($m['name'] ?? $path) . ' (' . $tier . ')';
+if (file_exists($du_file)) {
+    $du = json_decode(file_get_contents($du_file), true) ?: [];
+    $disk_updated = $du['updated'] ?? null;
+    foreach ($du['drives'] ?? [] as $d) {
+        $total = (int)($d['total_bytes'] ?? 0);
+        $free  = (int)($d['free_bytes']  ?? 0);
+        $used  = (int)($d['used_bytes']  ?? 0);
+        if ($total === 0) continue;
+        $pct    = round($used / $total * 100);
+        $labels = array_merge([$d['label'] ?? ''], $d['extra_labels'] ?? []);
         $disks[] = [
-            'label' => $label,
-            'path'  => $path,
+            'label' => implode(', ', array_map('htmlspecialchars', $labels)),
+            'path'  => htmlspecialchars($d['path'] ?? ''),
             'total' => $total,
             'free'  => $free,
             'used'  => $used,
@@ -229,12 +218,19 @@ layout_start('System Status', 'health');
     <div class="card-header">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 11H5V3H3v18h2v-8h14v8h2V3h-2v8zM7 5h10v4H7V5z"/></svg>
       Disk Space
+      <?php if ($disk_updated): ?>
+      <span style="margin-left:auto;font-size:.7rem;font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">Updated <?= htmlspecialchars($disk_updated) ?></span>
+      <?php endif; ?>
     </div>
 
     <?php if (empty($disks)): ?>
     <div class="placeholder">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M19 11H5V3H3v18h2v-8h14v8h2V3h-2v8zM7 5h10v4H7V5z"/></svg>
+      <?php if (!file_exists($du_file)): ?>
+      Disk data not yet available — it will appear after the mover service starts or runs once.
+      <?php else: ?>
       No path mappings configured — add them in <a href="config.php" style="color:var(--accent)">Settings</a>.
+      <?php endif; ?>
     </div>
     <?php else: ?>
     <?php foreach ($disks as $d):
