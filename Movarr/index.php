@@ -622,15 +622,11 @@ $extra_head = <<<'CSS'
 
 /* ── Search field ── */
 .tb-search {
-  position: relative; display: flex; align-items: center;
+  display: flex; align-items: center;
   margin: 0 6px;
 }
-.tb-search svg {
-  position: absolute; left: .55rem; top: 50%;
-  transform: translateY(-50%); color: var(--muted); pointer-events: none;
-}
 .tb-search input {
-  padding-left: 1.9rem; width: 200px; font-size: .83rem;
+  width: 200px; font-size: .83rem; padding: 0 .65rem;
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius); height: 32px;
   color: var(--text); outline: none;
@@ -662,9 +658,6 @@ layout_start('Library', 'dashboard', $extra_head);
 
   <div class="sc-toolbar-left">
     <div class="tb-search">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-      </svg>
       <input type="text" id="search-input" placeholder="Search titles…" autocomplete="off">
     </div>
     <div class="sc-item-count">
@@ -1370,23 +1363,29 @@ function pollSyncCompletion(stateKey, beforeTs) {
     return true;
   }
 
+  // applyVisibility: show/hide only — no DOM reorder (fast, used for search)
+  function applyVisibility() {
+    var cards   = [...posterView.querySelectorAll('.sc-card')];
+    var ovRows  = [...ovView.querySelectorAll('.ov-row')];
+    var tblRows = [...document.querySelectorAll('#tbl-view .sc-tbl-row')];
+    var n = 0;
+    cards.forEach(function(c)   { var v=isVisible(c); c.style.display=v?'':'none'; if(v)n++; });
+    ovRows.forEach(function(r)  { r.style.display=isVisible(r)?'':'none'; });
+    tblRows.forEach(function(r) { r.style.display=isVisible(r)?'flex':'none'; });
+    if (countEl) countEl.textContent = n;
+  }
+
+  // applyAll: sort + visibility (used for sort/filter changes)
   function applyAll() {
     var cards   = [...posterView.querySelectorAll('.sc-card')];
     var ovRows  = [...ovView.querySelectorAll('.ov-row')];
     var tblRows = [...document.querySelectorAll('#tbl-view .sc-tbl-row')];
-
     cards.sort(cmp).forEach(function(c)   { posterView.appendChild(c); });
     var ovCard = ovView.querySelector('.card');
     if (ovCard) ovRows.sort(cmp).forEach(function(r) { ovCard.appendChild(r); });
     var tblCont = document.getElementById('tbl-container');
     if (tblCont) tblRows.sort(cmp).forEach(function(r) { tblCont.appendChild(r); });
-
-    var n = 0;
-    cards.forEach(function(c)   { var v=isVisible(c); c.style.display=v?'':'none'; if(v)n++; });
-    ovRows.forEach(function(r)  { r.style.display=isVisible(r)?'':'none'; });
-    tblRows.forEach(function(r) { r.style.display=isVisible(r)?'flex':'none'; });
-
-    if (countEl) countEl.textContent = n;
+    applyVisibility();
   }
 
   window.toggleMenu = function(id) {
@@ -1433,7 +1432,13 @@ function pollSyncCompletion(stateKey, beforeTs) {
     if (arrow) arrow.textContent = sortDirs[currentSort] ? '↑' : '↓';
   });
 
-  if (searchInput) searchInput.addEventListener('input', applyAll);
+  if (searchInput) {
+    var _searchTimer = null;
+    searchInput.addEventListener('input', function() {
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(applyVisibility, 180);
+    });
+  }
 
   applyAll();
 })();

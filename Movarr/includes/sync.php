@@ -348,6 +348,22 @@ function sync_tautulli(PDO $db, array $s): array
 
     // Bulk-update media_library for shows
     if ($show_map) {
+        // Diagnostic: count how many resolved IDs actually exist in media_library
+        $chk   = $db->prepare("SELECT COUNT(*), MAX(last_watched_at) FROM media_library WHERE service='sonarr' AND external_id=?");
+        $id_match = 0; $id_miss = 0; $already_newer = 0; $sample_miss_id = 0;
+        foreach ($show_map as $tid => $ts) {
+            $chk->execute([$tid]);
+            [$cnt, $existing_ts] = $chk->fetch(PDO::FETCH_NUM);
+            if ((int)$cnt === 0) { $id_miss++; if (!$sample_miss_id) $sample_miss_id = $tid; }
+            else { $id_match++; if ($existing_ts && (int)$existing_ts >= $ts) $already_newer++; }
+        }
+        sync_log(sprintf(
+            'Show DB check: %d IDs matched, %d not found in media_library%s, %d already up-to-date',
+            $id_match, $id_miss,
+            $sample_miss_id ? " (sample missing tvdb=$sample_miss_id)" : '',
+            $already_newer
+        ));
+
         $stmt = $db->prepare(
             "UPDATE media_library SET last_watched_at = ?
              WHERE service = 'sonarr' AND external_id = ?

@@ -129,15 +129,11 @@ $extra_head = <<<'CSS'
 
 /* ── Search field in toolbar left ── */
 .tb-search {
-  position: relative; display: flex; align-items: center;
+  display: flex; align-items: center;
   margin: 0 8px;
 }
-.tb-search svg {
-  position: absolute; left: .55rem; top: 50%;
-  transform: translateY(-50%); color: var(--muted); pointer-events: none;
-}
 .tb-search input {
-  padding-left: 1.9rem; width: 200px; font-size: .83rem;
+  width: 200px; font-size: .83rem; padding: 0 .65rem;
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius); height: 32px;
   color: var(--text); outline: none;
@@ -243,9 +239,6 @@ layout_start('Tracked Media', 'tracked', $extra_head);
   <!-- LEFT: search + count -->
   <div class="sc-toolbar-left">
     <div class="tb-search">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-      </svg>
       <input type="text" id="search-input" placeholder="Search…" autocomplete="off">
     </div>
     <div class="sc-item-count">
@@ -537,22 +530,21 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     return sortAsc ? bv - av : av - bv;
   }
 
-  function applyAll() {
-    var rs = rows();
-    var tbl = document.getElementById('tracked-table');
-
-    // Sort & reorder
-    rs.sort(cmp).forEach(function(r) { tbl.appendChild(r); });
-
-    // Show/hide
+  function applyVisibility() {
     var n = 0;
-    rs.forEach(function(r) {
+    rows().forEach(function(r) {
       var v = isVisible(r);
       r.style.display = v ? 'flex' : 'none';
       if (v) n++;
     });
-
     if (visCountEl) visCountEl.textContent = n;
+  }
+
+  function applyAll() {
+    var rs = rows();
+    var tbl = document.getElementById('tracked-table');
+    rs.sort(cmp).forEach(function(r) { tbl.appendChild(r); });
+    applyVisibility();
   }
 
   function updateSortHeaders() {
@@ -609,7 +601,13 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     if (!e.target.closest('.sc-menu-wrap') && !e.target.closest('.sc-menu')) closeAllMenus();
   });
 
-  if (searchInput) searchInput.addEventListener('input', applyAll);
+  if (searchInput) {
+    var _searchTimer = null;
+    searchInput.addEventListener('input', function() {
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(applyVisibility, 180);
+    });
+  }
 
   // Init
   document.querySelectorAll('#sort-menu .sc-menu-item').forEach(function(i) {
