@@ -118,9 +118,61 @@ if ($apiKey) {
             $tmdb_id = 0;
             $guid = $m['guid'] ?? '';
             if (preg_match('/(?:themoviedb|tmdb):\/\/(\d+)/i', $guid, $gm)) $tmdb_id = (int)$gm[1];
-            $movies[] = ['title'=>$m['title']??'Unknown','year'=>$m['year']??'','thumb'=>$m['thumb']??'','added_at'=>$addedAt,'tmdb_id'=>$tmdb_id];
+            $movies[] = ['title'=>$m['title']??'Unknown','year'=>$m['year']??'','thumb'=>$m['thumb']??'','added_at'=>$addedAt,'tmdb_id'=>$tmdb_id,'rating_key'=>$m['rating_key']??''];
         }
         usort($movies, fn($a,$b) => $b['added_at'] <=> $a['added_at']);
+    }
+}
+
+// ── Tautulli metadata fallback: resolve TVDB/TMDB IDs for plex:// GUIDs ──────
+// When Plex uses the new agent (plex://show/...), history records don't contain a
+// parseable TVDB ID.  get_metadata for the show/movie rating key always returns the
+// full guids array with tvdb:// and tmdb:// entries.
+// Results are cached in a JSON file for 24 h to avoid N API calls on every load.
+if ($apiKey) {
+    $guid_cache_file = config_base() . '/guid_cache.json';
+    $guid_cache = [];
+    if (file_exists($guid_cache_file)) {
+        $gc = json_decode(@file_get_contents($guid_cache_file), true);
+        if (is_array($gc)) $guid_cache = $gc;
+    }
+    $guid_cache_dirty = false;
+    $now = time();
+
+    $resolve_guid = function(string $rk, string $pattern) use ($apiBase, $apiKey, &$guid_cache, &$guid_cache_dirty, $now): int {
+        if (!$rk) return 0;
+        $ckey = $pattern[0] . ':' . $rk; // 't:ratingkey' or 'm:ratingkey'
+        if (isset($guid_cache[$ckey]) && $guid_cache[$ckey]['exp'] > $now) return (int)$guid_cache[$ckey]['id'];
+        $meta = tautulli_get($apiBase, $apiKey, 'get_metadata', ['rating_key' => $rk]);
+        $id = 0;
+        if ($meta) {
+            foreach ($meta['guids'] ?? [] as $g) {
+                if (preg_match($pattern, $g['id'] ?? '', $gm)) { $id = (int)$gm[1]; break; }
+            }
+            if (!$id) {
+                if (preg_match($pattern, $meta['guid'] ?? '', $gm)) $id = (int)$gm[1];
+            }
+        }
+        $guid_cache[$ckey] = ['id' => $id, 'exp' => $now + 86400];
+        $guid_cache_dirty = true;
+        return $id;
+    };
+
+    foreach ($tvShows as $show => &$info) {
+        if (!$info['tvdb_id'] && $info['rating_key']) {
+            $info['tvdb_id'] = $resolve_guid($info['rating_key'], '/(?:thetvdb|tvdb):\/\/(\d+)/i');
+        }
+    }
+    unset($info);
+    foreach ($movies as &$movie) {
+        if (!$movie['tmdb_id'] && ($movie['rating_key'] ?? '')) {
+            $movie['tmdb_id'] = $resolve_guid($movie['rating_key'], '/(?:themoviedb|tmdb):\/\/(\d+)/i');
+        }
+    }
+    unset($movie);
+
+    if ($guid_cache_dirty) {
+        @file_put_contents($guid_cache_file, json_encode($guid_cache));
     }
 }
 
