@@ -336,8 +336,6 @@ $extra_head = <<<'CSS'
 
 /* ── Sync button (wider to fit label) ── */
 .sc-tb-btn.sc-tb-sync { width: 56px; }
-.sc-tb-btn.sc-tb-sync.syncing { color: var(--accent); animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Dropdown menus ── */
 .sc-menu-wrap { position: relative; }
@@ -1178,8 +1176,6 @@ function triggerSync(type) {
 
   var action   = type === 'tautulli' ? 'sync_tautulli' : 'sync_library';
   var stateKey = type === 'tautulli' ? 'tautulli_synced_at' : 'library_synced_at';
-  var syncBtn  = document.querySelector('.sc-tb-sync');
-  if (syncBtn) syncBtn.classList.add('syncing');
 
   var form = new FormData();
   form.append('action', action);
@@ -1187,32 +1183,30 @@ function triggerSync(type) {
   fetch('index.php', { method: 'POST', body: form })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (!data.queued) { if (syncBtn) syncBtn.classList.remove('syncing'); return; }
+      if (!data.queued) return;
       // Snapshot current timestamp then start polling
       fetch('index.php?action=sync_status')
         .then(function(r) { return r.json(); })
         .then(function(before) {
-          pollSyncCompletion(stateKey, before[stateKey] || 0, syncBtn);
+          pollSyncCompletion(stateKey, before[stateKey] || 0);
         });
     })
-    .catch(function() { if (syncBtn) syncBtn.classList.remove('syncing'); });
+    .catch(function() {});
 }
 
-function pollSyncCompletion(stateKey, beforeTs, syncBtn) {
+function pollSyncCompletion(stateKey, beforeTs) {
   var interval = setInterval(function() {
     fetch('index.php?action=sync_status')
       .then(function(r) { return r.json(); })
       .then(function(state) {
         if ((state[stateKey] || 0) > beforeTs) {
           clearInterval(interval);
-          if (syncBtn) syncBtn.classList.remove('syncing');
           location.reload();
         }
       })
       .catch(function() {});
   }, 5000);
-  // Stop polling after 15 minutes in case something goes wrong
-  setTimeout(function() { clearInterval(interval); if (syncBtn) syncBtn.classList.remove('syncing'); }, 900000);
+  setTimeout(function() { clearInterval(interval); }, 900000);
 }
 
 (function() {

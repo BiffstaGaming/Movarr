@@ -50,6 +50,11 @@ function sync_library(PDO $db, array $s): array
     $stats    = ['sonarr' => 0, 'radarr' => 0, 'removed' => 0, 'errors' => []];
     $now      = time();
 
+    $run_state = read_sync_state();
+    $run_state['library_running']       = true;
+    $run_state['library_running_since'] = time();
+    write_sync_state($run_state);
+
     sync_log('Library sync started');
 
     $resolve_mapping = function (string $path) use ($mappings): array {
@@ -174,6 +179,7 @@ function sync_library(PDO $db, array $s): array
 
     // Persist sync timestamp
     $state = read_sync_state();
+    $state['library_running']       = false;
     $state['library_synced_at']     = $now;
     $state['library_sonarr_count']  = $stats['sonarr'];
     $state['library_radarr_count']  = $stats['radarr'];
@@ -204,6 +210,11 @@ function sync_tautulli(PDO $db, array $s): array
         sync_log('Tautulli sync skipped: not configured', 'WARN');
         return $stats;
     }
+
+    $run_state = read_sync_state();
+    $run_state['tautulli_running']       = true;
+    $run_state['tautulli_running_since'] = time();
+    write_sync_state($run_state);
 
     sync_log('Tautulli watch-history sync started');
 
@@ -367,6 +378,7 @@ function sync_tautulli(PDO $db, array $s): array
 
     // Persist sync state
     $state = read_sync_state();
+    $state['tautulli_running']        = false;
     $state['tautulli_synced_at']      = time();
     $state['tautulli_shows_updated']  = $stats['shows_updated'];
     $state['tautulli_movies_updated'] = $stats['movies_updated'];
