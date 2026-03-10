@@ -21,32 +21,14 @@ $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $post_action = $_POST['action'] ?? '';
 
-    // Inline sync triggers (dashboard "Sync" dropdown)
-    if ($post_action === 'sync_library') {
-        try {
-            $sdb    = db_connect();
-            $result = sync_library($sdb, $s);
-            if ($result['errors']) {
-                foreach ($result['errors'] as $e) $errors[] = $e;
-            }
-        } catch (Exception $e) {
-            $errors[] = 'Sync failed: ' . $e->getMessage();
-        }
-        header('Location: index.php');
-        exit;
-    }
-
-    if ($post_action === 'sync_tautulli') {
-        try {
-            $sdb    = db_connect();
-            $result = sync_tautulli($sdb, $s);
-            if (!empty($result['errors'])) {
-                foreach ($result['errors'] as $e) $errors[] = $e;
-            }
-        } catch (Exception $e) {
-            $errors[] = 'Tautulli sync failed: ' . $e->getMessage();
-        }
-        header('Location: index.php');
+    // Async sync triggers — spawn background process, return immediately
+    if ($post_action === 'sync_library' || $post_action === 'sync_tautulli') {
+        $type = $post_action === 'sync_tautulli' ? 'tautulli' : 'library';
+        $cmd  = 'php ' . escapeshellarg(__DIR__ . '/sync.php') . ' ' . escapeshellarg($type)
+              . ' >> /config/cron.log 2>&1';
+        exec('nohup ' . $cmd . ' &');
+        header('Content-Type: application/json');
+        echo json_encode(['queued' => true, 'type' => $type]);
         exit;
     }
 
@@ -141,6 +123,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: index.php');
         exit;
     }
+}
+
+// ── Sync status endpoint (polled by JS after queueing a sync) ─────────────────
+if (($_GET['action'] ?? '') === 'sync_status') {
+    header('Content-Type: application/json');
+    $state = read_sync_state();
+    echo json_encode([
+        'library_synced_at'  => (int)($state['library_synced_at']  ?? 0),
+        'tautulli_synced_at' => (int)($state['tautulli_synced_at'] ?? 0),
+    ]);
+    exit;
 }
 
 // ── Load library from DB ──────────────────────────────────────────────────────
@@ -648,14 +641,6 @@ layout_start('Library', 'dashboard', $extra_head);
 </div>
 <?php endif; ?>
 
-<!-- ── Sync forms (hidden, submitted by JS sync dropdown) ── -->
-<form id="sync-library-form" method="post" style="display:none">
-  <input type="hidden" name="action" value="sync_library">
-</form>
-<form id="sync-tautulli-form" method="post" style="display:none">
-  <input type="hidden" name="action" value="sync_tautulli">
-</form>
-
 <!-- ── Toolbar ── -->
 <div class="sc-toolbar">
 
@@ -663,14 +648,14 @@ layout_start('Library', 'dashboard', $extra_head);
     <div class="sc-item-count">
       <span id="visible-count"><?= $totalItems ?></span>&nbsp;items
     </div>
-    <div class="sc-sync-info">
+    <div class="sc-sync-info" id="sync-info-lib">
       <?php if ($last_lib_synced): ?>
         Library: <?= time_ago($last_lib_synced) ?>
       <?php else: ?>
         Library: never synced
       <?php endif; ?>
     </div>
-    <div class="sc-sync-info">
+    <div class="sc-sync-info" id="sync-info-tau">
       <?php if ($last_tau_synced): ?>
         Watched: <?= time_ago($last_tau_synced) ?>
       <?php else: ?>
@@ -813,10 +798,7 @@ layout_start('Library', 'dashboard', $extra_head);
   <strong>Library not synced yet</strong>
   Click <strong>Sync</strong> in the toolbar to fetch all titles from Sonarr &amp; Radarr.
   <br><br>
-  <form method="post" style="display:inline">
-    <input type="hidden" name="action" value="sync_library">
-    <button type="submit" class="btn btn-primary">Sync Now</button>
-  </form>
+  <button type="button" class="btn btn-primary" onclick="triggerSync('library')">Sync Now</button>
 </div>
 
 <?php else: ?>
@@ -1191,8 +1173,46 @@ function submitDashAction(btn) {
 }
 
 function triggerSync(type) {
-  var formId = type === 'tautulli' ? 'sync-tautulli-form' : 'sync-library-form';
-  document.getElementById(formId).submit();
+  // Close dropdown
+  document.querySelectorAll('.sc-menu').forEach(function(m) { m.classList.remove('open'); });
+
+  var action   = type === 'tautulli' ? 'sync_tautulli' : 'sync_library';
+  var stateKey = type === 'tautulli' ? 'tautulli_synced_at' : 'library_synced_at';
+  var syncBtn  = document.querySelector('.sc-tb-sync');
+  if (syncBtn) syncBtn.classList.add('syncing');
+
+  var form = new FormData();
+  form.append('action', action);
+
+  fetch('index.php', { method: 'POST', body: form })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.queued) { if (syncBtn) syncBtn.classList.remove('syncing'); return; }
+      // Snapshot current timestamp then start polling
+      fetch('index.php?action=sync_status')
+        .then(function(r) { return r.json(); })
+        .then(function(before) {
+          pollSyncCompletion(stateKey, before[stateKey] || 0, syncBtn);
+        });
+    })
+    .catch(function() { if (syncBtn) syncBtn.classList.remove('syncing'); });
+}
+
+function pollSyncCompletion(stateKey, beforeTs, syncBtn) {
+  var interval = setInterval(function() {
+    fetch('index.php?action=sync_status')
+      .then(function(r) { return r.json(); })
+      .then(function(state) {
+        if ((state[stateKey] || 0) > beforeTs) {
+          clearInterval(interval);
+          if (syncBtn) syncBtn.classList.remove('syncing');
+          location.reload();
+        }
+      })
+      .catch(function() {});
+  }, 5000);
+  // Stop polling after 15 minutes in case something goes wrong
+  setTimeout(function() { clearInterval(interval); if (syncBtn) syncBtn.classList.remove('syncing'); }, 900000);
 }
 
 (function() {

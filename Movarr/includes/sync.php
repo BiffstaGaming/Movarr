@@ -276,14 +276,9 @@ function sync_tautulli(PDO $db, array $s): array
         foreach ($records as $r) {
             $date = (int)($r['date'] ?? 0);
             if (!$date) continue;
-            $guid = $r['grandparent_guid'] ?? '';
-            if (preg_match('/(?:thetvdb|tvdb):\/\/(\d+)/i', $guid, $m)) {
-                $tid = (int)$m[1];
-                if (!isset($show_map[$tid]) || $date > $show_map[$tid]) $show_map[$tid] = $date;
-            } elseif (str_starts_with($guid, 'plex://')) {
-                $rk = (string)($r['grandparent_rating_key'] ?? '');
-                if ($rk && (!isset($plex_show[$rk]) || $date > $plex_show[$rk])) $plex_show[$rk] = $date;
-            }
+            // grandparent_guid is not returned by get_history — always resolve via rating_key
+            $rk = (string)($r['grandparent_rating_key'] ?? '');
+            if ($rk && (!isset($plex_show[$rk]) || $date > $plex_show[$rk])) $plex_show[$rk] = $date;
         }
         $start += $page_size;
     } while (count($records) === $page_size);
