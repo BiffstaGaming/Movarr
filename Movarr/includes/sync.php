@@ -241,7 +241,8 @@ function sync_tautulli(PDO $db, array $s): array
         $base, $key, &$guid_cache, &$cache_dirty, &$stats, $now
     ): int {
         if (!$rk) return 0;
-        $ckey = $pattern[0] . ':' . $rk;
+        // Use a stable prefix derived from the pattern to avoid TV/movie collisions
+        $ckey = (str_contains($pattern, 'thetvdb') ? 'tv' : 'mv') . ':' . $rk;
         if (isset($guid_cache[$ckey]) && $guid_cache[$ckey]['exp'] > $now) {
             return (int)$guid_cache[$ckey]['id'];
         }
@@ -257,6 +258,20 @@ function sync_tautulli(PDO $db, array $s): array
                 $gs = $meta['guid'] ?? '';
                 if (preg_match($pattern, $gs, $m)) $id = (int)$m[1];
             }
+            if (!$id) {
+                // Log the raw GUIDs so we can see the format in the log
+                $raw_guids = [];
+                foreach ($meta['guids'] ?? [] as $g) {
+                    $raw_guids[] = is_array($g) ? ($g['id'] ?? json_encode($g)) : (string)$g;
+                }
+                if ($meta['guid'] ?? '') $raw_guids[] = 'guid=' . $meta['guid'];
+                if ($raw_guids) {
+                    $ptype = str_contains($pattern, 'thetvdb') ? 'tv' : 'mv';
+                    sync_log("rk=$rk guid_miss type=$ptype guids=" . implode('|', array_slice($raw_guids, 0, 5)), 'WARN');
+                }
+            }
+        } elseif ($meta === null) {
+            sync_log("rk=$rk get_metadata returned null", 'WARN');
         }
         if ($id > 0) {
             $guid_cache[$ckey] = ['id' => $id, 'exp' => $now + 86400];
@@ -294,16 +309,24 @@ function sync_tautulli(PDO $db, array $s): array
         $start += $page_size;
     } while (count($records) === $page_size);
 
-    sync_log(sprintf('Episode history: %d show buckets (direct) + %d plex:// to resolve',
-        count($show_map), count($plex_show)));
+    sync_log(sprintf('Episode history: %d show rating keys to resolve', count($plex_show)));
 
-    // Resolve plex:// show GUIDs via get_metadata
+    // Resolve show rating_keys → TVDb IDs via get_metadata
+    $resolved = 0; $unresolved = 0; $sample_fail = '';
     foreach ($plex_show as $rk => $date) {
         $tid = $resolve_plex($rk, '/(?:thetvdb|tvdb):\/\/(\d+)/i');
-        if ($tid > 0 && (!isset($show_map[$tid]) || $date > $show_map[$tid])) {
-            $show_map[$tid] = $date;
+        if ($tid > 0) {
+            $resolved++;
+            if (!isset($show_map[$tid]) || $date > $show_map[$tid]) $show_map[$tid] = $date;
+        } else {
+            $unresolved++;
+            if (!$sample_fail) $sample_fail = $rk;
         }
     }
+    sync_log(sprintf('Show resolution: %d resolved, %d unresolved%s',
+        $resolved, $unresolved,
+        $sample_fail ? " (sample unresolved rk=$sample_fail)" : ''
+    ));
 
     // Bulk-update media_library for shows
     if ($show_map) {

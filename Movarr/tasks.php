@@ -28,6 +28,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['queued' => true, 'type' => $type]);
         exit;
     }
+    if ($post_action === 'run_mover') {
+        $trigger = config_base() . '/.trigger';
+        @file_put_contents($trigger, date('Y-m-d H:i:s') . ' manual trigger from tasks page' . PHP_EOL);
+        header('Content-Type: application/json');
+        echo json_encode(['queued' => true, 'type' => 'mover']);
+        exit;
+    }
 }
 
 // ── GET: sync status (polled by JS) ───────────────────────────────────────────
@@ -103,7 +110,7 @@ $mover_next = next_cron_run($mover_cron);
 
 // ── Parse sync history from cron.log ──────────────────────────────────────────
 function parse_task_history(int $max = 40): array {
-    $logFile = config_base() . '/cron.log';
+    $logFile = log_file();
     if (!file_exists($logFile)) return [];
     $handle = fopen($logFile, 'rb');
     if (!$handle) return [];
@@ -264,11 +271,12 @@ layout_start('Tasks', 'tasks');
     <div class="task-sched"><?= htmlspecialchars($mover_cron) ?></div>
     <div class="task-last"><?= $last_move_ts ? fmt_rel_time($last_move_ts) : '—' ?></div>
     <div class="task-next"><?= $mover_next ? fmt_next($mover_next) : '—' ?></div>
-    <div class="task-status"><span class="dot dot-muted"></span><span>Idle</span></div>
+    <div class="task-status" id="mover-status"><span class="dot dot-muted"></span><span>Idle</span></div>
     <div class="task-action">
-      <a href="manual.php" class="btn-run" style="text-decoration:none;display:inline-flex;align-items:center">Queue Move</a>
+      <button class="btn-run" id="btn-mover" onclick="runTask('mover')">▶ Run Now</button>
     </div>
   </div>
+  <div class="notice-queued" id="notice-mover">Mover triggered — will run shortly…</div>
 
 </div><!-- .card -->
 
@@ -291,14 +299,31 @@ layout_start('Tasks', 'tasks');
 
 <script>
 function runTask(type) {
-  var btn        = document.getElementById('btn-' + type);
-  var notice     = document.getElementById('notice-' + type);
+  var btn    = document.getElementById('btn-' + type);
+  var notice = document.getElementById('notice-' + type);
+
+  if (btn) { btn.disabled = true; btn.textContent = type === 'mover' ? 'Queued…' : 'Running…'; btn.classList.add('running'); }
+  if (notice) notice.style.display = 'block';
+
+  // Mover: just trigger, no polling (separate container handles it)
+  if (type === 'mover') {
+    var form = new FormData();
+    form.append('action', 'run_mover');
+    fetch('tasks.php', { method: 'POST', body: form })
+      .then(function(r) { return r.json(); })
+      .catch(function() {})
+      .finally(function() {
+        setTimeout(function() {
+          if (btn)    { btn.disabled = false; btn.textContent = '▶ Run Now'; btn.classList.remove('running'); }
+          if (notice) notice.style.display = 'none';
+        }, 5000);
+      });
+    return;
+  }
+
   var statusDiv  = document.getElementById((type === 'tautulli' ? 'tau' : 'lib') + '-status');
   var stateKey   = type === 'tautulli' ? 'tautulli_synced_at' : 'library_synced_at';
-  var runningKey = type === 'tautulli' ? 'tautulli_running'   : 'library_running';
 
-  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; btn.classList.add('running'); }
-  if (notice) notice.style.display = 'block';
   if (statusDiv) statusDiv.innerHTML = '<span class="dot dot-amber"></span><span>Running</span>';
 
   var form = new FormData();
