@@ -18,7 +18,7 @@ $s           = load_settings();
 // ── Dashboard action handler ───────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $post_action = $_POST['action'] ?? '';
-    if (in_array($post_action, ['track', 'move_to_fast', 'move_to_slow'])) {
+    if (in_array($post_action, ['track', 'untrack', 'move_to_fast', 'move_to_slow'])) {
         try {
             $adb        = db_connect();
             $ext_id     = (int)($_POST['external_id'] ?? 0);
@@ -29,7 +29,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $folder     = trim($_POST['folder'] ?? '');
             $media_type = trim($_POST['media_type'] ?? 'show');
 
-            if ($ext_id && $mapping_id) {
+            if ($post_action === 'untrack') {
+                $track_id = (int)($_POST['track_id'] ?? 0);
+                if ($track_id) db_delete_tracked($adb, $track_id);
+            } elseif ($ext_id && $mapping_id) {
                 if ($post_action === 'track') {
                     $adb->prepare(
                         "INSERT OR IGNORE INTO tracked_media
@@ -156,24 +159,28 @@ function match_path_mapping(string $path, array $mappings): array {
 
 function render_dash_action_btns(?array $action, ?array $tr, string $title, string $wrap_cls = 'dash-card-actions'): string {
     if (!$action || empty($action['ext_id'])) return '';
-    $loc  = $tr ? ($tr['current_location'] ?? 'unknown') : $action['location'];
-    $base = ' data-ext-id="'.htmlspecialchars((string)$action['ext_id']).'"'
-          . ' data-service="'.htmlspecialchars($action['service']).'"'
-          . ' data-mapping-id="'.htmlspecialchars($action['mapping_id']).'"'
-          . ' data-title="'.htmlspecialchars($title, ENT_QUOTES).'"'
-          . ' data-folder="'.htmlspecialchars($action['folder'], ENT_QUOTES).'"'
-          . ' data-location="'.htmlspecialchars($action['location']).'"'
-          . ' data-media-type="'.htmlspecialchars($action['media_type']).'"'
-          . ' onclick="submitDashAction(this)"';
+    $loc     = $tr ? ($tr['current_location'] ?? 'unknown') : $action['location'];
+    $compact = str_contains($wrap_cls, 'row');
+    $base    = ' data-ext-id="'.htmlspecialchars((string)$action['ext_id']).'"'
+             . ' data-service="'.htmlspecialchars($action['service']).'"'
+             . ' data-mapping-id="'.htmlspecialchars($action['mapping_id']).'"'
+             . ' data-title="'.htmlspecialchars($title, ENT_QUOTES).'"'
+             . ' data-folder="'.htmlspecialchars($action['folder'], ENT_QUOTES).'"'
+             . ' data-location="'.htmlspecialchars($action['location']).'"'
+             . ' data-media-type="'.htmlspecialchars($action['media_type']).'"'
+             . ' data-track-id="'.($tr ? (int)$tr['id'] : '').'"'
+             . ' onclick="submitDashAction(this)"';
     $out = '<div class="'.htmlspecialchars($wrap_cls).'">';
-    if (!$tr) {
+    if ($tr) {
+        $out .= '<button class="dash-act-btn act-untrack" data-action="untrack"'.$base.'>'.($compact ? '−Trk' : 'Untrack').'</button>';
+    } else {
         $out .= '<button class="dash-act-btn act-track" data-action="track"'.$base.'>Track</button>';
     }
     if ($loc !== 'fast') {
-        $out .= '<button class="dash-act-btn act-fast" data-action="move_to_fast"'.$base.'>→&nbsp;Fast</button>';
+        $out .= '<button class="dash-act-btn act-fast" data-action="move_to_fast"'.$base.'>'.($compact ? '→Fast' : '→&nbsp;Fast').'</button>';
     }
     if ($loc !== 'slow') {
-        $out .= '<button class="dash-act-btn act-slow" data-action="move_to_slow"'.$base.'>←&nbsp;Slow</button>';
+        $out .= '<button class="dash-act-btn act-slow" data-action="move_to_slow"'.$base.'>'.($compact ? '←Slow' : '←&nbsp;Slow').'</button>';
     }
     $out .= '</div>';
     return $out;
@@ -557,13 +564,14 @@ $extra_head = <<<'CSS'
   color: var(--text); cursor: pointer; white-space: nowrap; transition: background .1s;
 }
 .dash-act-btn:hover { background: rgba(60,60,80,.9); }
-.dash-act-btn.act-fast  { color: var(--green); border-color: var(--green); }
-.dash-act-btn.act-slow  { color: var(--muted); }
-.dash-act-btn.act-track { color: var(--accent); border-color: var(--accent); }
-.dash-row-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; margin-left: .5rem; }
-.dash-row-actions .dash-act-btn { flex: none; padding: 3px 8px; font-size: .68rem; }
-.sc-tbl-actions { flex: 0 0 130px; min-width: 100px; justify-content: flex-end; }
-.sc-tbl-actions .dash-act-btn { flex: none; padding: 3px 7px; font-size: .68rem; }
+.dash-act-btn.act-fast    { color: var(--green); border-color: var(--green); }
+.dash-act-btn.act-slow    { color: var(--muted); }
+.dash-act-btn.act-track   { color: var(--accent); border-color: var(--accent); }
+.dash-act-btn.act-untrack { color: var(--red); border-color: var(--red); }
+.dash-row-actions { display: flex; gap: 3px; align-items: center; flex-shrink: 0; margin-left: .5rem; }
+.dash-row-actions .dash-act-btn { flex: none; padding: 2px 6px; font-size: .65rem; }
+.sc-tbl-actions { flex: 0 0 155px; min-width: 140px; justify-content: flex-end; }
+.sc-tbl-actions .dash-act-btn { flex: none; padding: 2px 5px; font-size: .65rem; }
 
 @media(max-width:700px) {
   .sc-toolbar { margin: -1rem -1rem 1rem; }
@@ -982,6 +990,7 @@ function submitDashAction(btn) {
   document.getElementById('daf-folder').value     = d.folder;
   document.getElementById('daf-location').value   = d.location;
   document.getElementById('daf-media-type').value = d.mediaType;
+  document.getElementById('daf-track-id').value   = d.trackId || '';
   document.getElementById('dash-action-form').submit();
 }
 
@@ -1225,6 +1234,7 @@ function submitDashAction(btn) {
   <input type="hidden" name="folder"           id="daf-folder">
   <input type="hidden" name="current_location" id="daf-location">
   <input type="hidden" name="media_type"       id="daf-media-type">
+  <input type="hidden" name="track_id"         id="daf-track-id">
 </form>
 
 <?php layout_end(); ?>
