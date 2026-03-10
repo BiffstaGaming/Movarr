@@ -198,6 +198,13 @@ $sync_token = $s['sync_token'];
 
 // ── Extra CSS ─────────────────────────────────────────────────────────────────
 $extra_head = <<<'CSS'
+<script>
+// Hide poster-view before render if a different view was saved — prevents flash
+(function(){try{var v=localStorage.getItem('mv2_view');if(v&&v!=='poster')document.documentElement.classList.add('mv-no-poster');}catch(e){}}());
+</script>
+<style>
+.mv-no-poster #poster-view { display: none; }
+</style>
 <style>
 /* ── Sonarr-style toolbar ── */
 .sc-toolbar {
