@@ -15,6 +15,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
         $id = (int)($_POST['track_id'] ?? 0);
         if ($id) db_delete_tracked($db, $id);
         header('Location: tracked.php?msg='.urlencode('Entry removed.').'&mtype=success'); exit;
+    } elseif ($action === 'unpin') {
+        $id = (int)($_POST['track_id'] ?? 0);
+        if ($id) {
+            $db->prepare("UPDATE tracked_media SET relocate_after=?, source='auto', updated_at=? WHERE id=?")
+               ->execute([time(), time(), $id]);
+        }
+        header('Location: tracked.php?msg='.urlencode('Unpinned — auto-relocation re-enabled.').'&mtype=success'); exit;
     } elseif ($action === 'pin') {
         $id = (int)($_POST['track_id'] ?? 0);
         if ($id) db_pin_tracked($db, $id);
@@ -427,7 +434,13 @@ layout_start('Tracked Media', 'tracked', $extra_head);
 
     <div class="sc-tbl-cell sc-tbl-actions">
       <div style="display:flex;gap:.3rem;align-items:center">
-        <?php if (!$is_pinned): ?>
+        <?php if ($is_pinned): ?>
+        <form method="POST" action="tracked.php" style="display:inline">
+          <input type="hidden" name="action" value="unpin">
+          <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
+          <button type="submit" class="btn" style="padding:.2rem .45rem;font-size:.7rem;color:var(--accent)" title="Unpin — re-enable auto-relocation">📍 Unpin</button>
+        </form>
+        <?php else: ?>
         <form method="POST" action="tracked.php" style="display:inline">
           <input type="hidden" name="action" value="pin">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
@@ -475,7 +488,7 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     </div>
     <div class="legend-item">
       <span class="badge badge-amber" style="font-size:.65rem">Pinned</span>
-      <span>Auto-relocation disabled</span>
+      <span>Auto-relocation disabled — click 📍 Unpin to re-enable</span>
     </div>
     <div class="legend-item">
       <span class="badge badge-red" style="font-size:.65rem">Expired</span>

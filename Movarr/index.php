@@ -27,7 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $a_title    = trim($_POST['title'] ?? '');
             $location   = trim($_POST['current_location'] ?? 'unknown');
             $folder     = trim($_POST['folder'] ?? '');
-            $media_type = trim($_POST['media_type'] ?? 'show');
+            $media_type   = trim($_POST['media_type'] ?? 'show');
+            $size_on_disk = (int)($_POST['size_on_disk'] ?? 0);
 
             if ($post_action === 'untrack') {
                 $track_id = (int)($_POST['track_id'] ?? 0);
@@ -36,18 +37,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($post_action === 'track') {
                     $adb->prepare(
                         "INSERT OR IGNORE INTO tracked_media
-                         (media_type,title,external_id,service,mapping_id,folder,current_location,source,created_at,updated_at)
-                         VALUES (?,?,?,?,?,?,?,'manual',?,?)"
-                    )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,time(),time()]);
+                         (media_type,title,external_id,service,mapping_id,folder,current_location,size_on_disk,source,created_at,updated_at)
+                         VALUES (?,?,?,?,?,?,?,?,'manual',?,?)"
+                    )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,$size_on_disk,time(),time()]);
                 } else {
                     $direction = $post_action === 'move_to_fast' ? 'to_fast' : 'to_slow';
                     db_queue_move($adb, $ext_id, $service, $mapping_id, $direction, 'Queued from dashboard', $a_title);
                     file_put_contents(manual_trigger_file(), date('c'));
                     $adb->prepare(
                         "INSERT OR IGNORE INTO tracked_media
-                         (media_type,title,external_id,service,mapping_id,folder,current_location,source,created_at,updated_at)
-                         VALUES (?,?,?,?,?,?,?,'manual',?,?)"
-                    )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,time(),time()]);
+                         (media_type,title,external_id,service,mapping_id,folder,current_location,size_on_disk,source,created_at,updated_at)
+                         VALUES (?,?,?,?,?,?,?,?,'manual',?,?)"
+                    )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,$size_on_disk,time(),time()]);
                 }
             }
         } catch (Exception $e) {}
@@ -122,13 +123,13 @@ $tracked_map = [];
 try {
     $tdb = db_connect();
     foreach (db_all_tracked($tdb) as $tr) {
-        $key = strtolower($tr['title'] ?? '');
+        $key = norm_title($tr['title'] ?? '');
         if ($key !== '') $tracked_map[$key] = $tr;
     }
 } catch (Exception $e) {}
 
 function get_tracked(array &$map, string $title): ?array {
-    return $map[strtolower($title)] ?? null;
+    return $map[norm_title($title)] ?? null;
 }
 function fmt_storage(?array $tr): string {
     if (!$tr) return '—';
@@ -145,6 +146,18 @@ function time_ago(int $ts): string {
     if ($diff < 3600)  return round($diff/60).'m ago';
     if ($diff < 86400) return round($diff/3600).'h ago';
     return round($diff/86400).'d ago';
+}
+
+/**
+ * Normalise a title for fuzzy matching between Tautulli and Sonarr/Radarr.
+ * Converts Unicode apostrophes/quotes to ASCII and collapses whitespace.
+ */
+function norm_title(string $t): string {
+    $t = str_replace(["\u{2019}", "\u{2018}", "\u{0060}", "\u{00B4}", "\u{02BC}"], "'", $t);
+    $t = str_replace(["\u{201C}", "\u{201D}", "\u{00AB}", "\u{00BB}"], '"', $t);
+    $t = str_replace(["\u{2013}", "\u{2014}"], '-', $t);
+    $t = preg_replace('/\s+/', ' ', trim($t));
+    return strtolower($t);
 }
 
 function match_path_mapping(string $path, array $mappings): array {
@@ -169,6 +182,7 @@ function render_dash_action_btns(?array $action, ?array $tr, string $title, stri
              . ' data-location="'.htmlspecialchars($action['location']).'"'
              . ' data-media-type="'.htmlspecialchars($action['media_type']).'"'
              . ' data-track-id="'.($tr ? (int)$tr['id'] : '').'"'
+             . ' data-size-on-disk="'.(int)($action['size_on_disk'] ?? 0).'"'
              . ' onclick="submitDashAction(this)"';
     $out = '<div class="'.htmlspecialchars($wrap_cls).'">';
     if ($tr) {
@@ -202,11 +216,20 @@ if (!empty($s['sonarr']['url']) && !empty($s['sonarr']['api_key'])) {
             $path = $sr['path'] ?? '';
             [$map_id, $loc] = match_path_mapping($path, $_mappings);
             if ($map_id) {
-                $media_action_map[strtolower($sr['title'] ?? '')] = [
+                $entry = [
                     'ext_id' => (int)($sr['tvdbId'] ?? 0), 'service' => 'sonarr',
                     'mapping_id' => $map_id, 'folder' => basename($path),
                     'location' => $loc, 'media_type' => 'show',
+                    'size_on_disk' => (int)($sr['statistics']['sizeOnDisk'] ?? $sr['sizeOnDisk'] ?? 0),
                 ];
+                $media_action_map[norm_title($sr['title'] ?? '')] = $entry;
+                // Also index alternate titles so Plex/Tautulli name variants match
+                foreach ($sr['alternateTitles'] ?? [] as $alt) {
+                    $ak = norm_title($alt['title'] ?? '');
+                    if ($ak !== '' && !isset($media_action_map[$ak])) {
+                        $media_action_map[$ak] = $entry;
+                    }
+                }
             }
         }
     }
@@ -219,11 +242,19 @@ if (!empty($s['radarr']['url']) && !empty($s['radarr']['api_key'])) {
             $path = $mv['path'] ?? '';
             [$map_id, $loc] = match_path_mapping($path, $_mappings);
             if ($map_id) {
-                $media_action_map[strtolower($mv['title'] ?? '')] = [
+                $entry = [
                     'ext_id' => (int)($mv['tmdbId'] ?? 0), 'service' => 'radarr',
                     'mapping_id' => $map_id, 'folder' => basename($path),
                     'location' => $loc, 'media_type' => 'movie',
+                    'size_on_disk' => (int)($mv['statistics']['sizeOnDisk'] ?? $mv['sizeOnDisk'] ?? $mv['movieFile']['size'] ?? 0),
                 ];
+                $media_action_map[norm_title($mv['title'] ?? '')] = $entry;
+                foreach ($mv['alternateTitles'] ?? [] as $alt) {
+                    $ak = norm_title($alt['title'] ?? '');
+                    if ($ak !== '' && !isset($media_action_map[$ak])) {
+                        $media_action_map[$ak] = $entry;
+                    }
+                }
             }
         }
     }
@@ -751,7 +782,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
     <?php endif; ?>
     <div class="sc-tri sc-tri-watched" title="Recently watched"></div>
-    <?= render_dash_action_btns($media_action_map[strtolower($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle) ?>
+    <?= render_dash_action_btns($media_action_map[norm_title($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle) ?>
   </div>
   <div class="sc-card-body">
     <div class="sc-title" title="<?= htmlspecialchars($showTitle) ?>"><?= htmlspecialchars($showTitle) ?></div>
@@ -779,7 +810,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
     <?php endif; ?>
     <div class="sc-tri sc-tri-new" title="Recently added"></div>
-    <?= render_dash_action_btns($media_action_map[strtolower($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title']) ?>
+    <?= render_dash_action_btns($media_action_map[norm_title($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title']) ?>
   </div>
   <div class="sc-card-body">
     <div class="sc-title" title="<?= htmlspecialchars($movie['title']) ?>">
@@ -816,7 +847,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div style="font-weight:700;color:var(--accent);font-size:.88rem">▶ <?= $info['plays'] ?></div>
       <div style="font-size:.7rem;color:var(--muted)"><?= $info['plays']===1?'play':'plays' ?></div>
     </div>
-    <?= render_dash_action_btns($media_action_map[strtolower($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle, 'dash-row-actions') ?>
+    <?= render_dash_action_btns($media_action_map[norm_title($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle, 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
   <?php foreach ($movies as $movie): ?>
@@ -838,7 +869,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="ov-meta">Added <?= time_ago($movie['added_at']) ?></div>
     </div>
     <div class="ov-right"><span class="badge badge-green">New</span></div>
-    <?= render_dash_action_btns($media_action_map[strtolower($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title'], 'dash-row-actions') ?>
+    <?= render_dash_action_btns($media_action_map[norm_title($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title'], 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
   <?php if ($totalItems===0): ?><div class="empty">No media found for the last <?= $days ?> days.</div><?php endif; ?>
@@ -906,7 +937,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-plays col-plays" style="font-weight:700;color:var(--accent)"><?= $info['plays'] ?></div>
       <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)"><?= count($info['users']) ?></div>
       <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem"><?= time_ago($info['last_watched']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[strtolower($showTitle)] ?? null, $tr, $showTitle, 'dash-row-actions') ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[norm_title($showTitle)] ?? null, $tr, $showTitle, 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
@@ -940,7 +971,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-plays col-plays" style="color:var(--muted)">—</div>
       <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)">—</div>
       <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem">Added <?= time_ago($movie['added_at']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[strtolower($movie['title'])] ?? null, $tr, $movie['title'], 'dash-row-actions') ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[norm_title($movie['title'])] ?? null, $tr, $movie['title'], 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
@@ -991,6 +1022,7 @@ function submitDashAction(btn) {
   document.getElementById('daf-location').value   = d.location;
   document.getElementById('daf-media-type').value = d.mediaType;
   document.getElementById('daf-track-id').value   = d.trackId || '';
+  document.getElementById('daf-size').value        = d.sizeOnDisk || '0';
   document.getElementById('dash-action-form').submit();
 }
 
@@ -1235,6 +1267,7 @@ function submitDashAction(btn) {
   <input type="hidden" name="current_location" id="daf-location">
   <input type="hidden" name="media_type"       id="daf-media-type">
   <input type="hidden" name="track_id"         id="daf-track-id">
+  <input type="hidden" name="size_on_disk"     id="daf-size">
 </form>
 
 <?php layout_end(); ?>
