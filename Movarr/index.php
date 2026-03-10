@@ -89,7 +89,10 @@ if ($apiKey) {
         foreach ($records as $r) {
             $show = $r['grandparent_title'] ?? 'Unknown Show';
             if (!isset($tvShows[$show])) {
-                $tvShows[$show] = ['plays'=>0,'users'=>[],'rating_key'=>$r['grandparent_rating_key']??'','last_watched'=>0];
+                $tvdb_id = 0;
+                $guid = $r['grandparent_guid'] ?? '';
+                if (preg_match('/(?:thetvdb|tvdb):\/\/(\d+)/i', $guid, $gm)) $tvdb_id = (int)$gm[1];
+                $tvShows[$show] = ['plays'=>0,'users'=>[],'rating_key'=>$r['grandparent_rating_key']??'','last_watched'=>0,'tvdb_id'=>$tvdb_id];
             }
             $tvShows[$show]['plays']++;
             $tvShows[$show]['users'][$r['user'] ?? 'Unknown'] = true;
@@ -112,7 +115,10 @@ if ($apiKey) {
         foreach ($data['recently_added'] ?? [] as $m) {
             $addedAt = (int)($m['added_at'] ?? 0);
             if ($addedAt < $cutoff) continue;
-            $movies[] = ['title'=>$m['title']??'Unknown','year'=>$m['year']??'','thumb'=>$m['thumb']??'','added_at'=>$addedAt];
+            $tmdb_id = 0;
+            $guid = $m['guid'] ?? '';
+            if (preg_match('/(?:themoviedb|tmdb):\/\/(\d+)/i', $guid, $gm)) $tmdb_id = (int)$gm[1];
+            $movies[] = ['title'=>$m['title']??'Unknown','year'=>$m['year']??'','thumb'=>$m['thumb']??'','added_at'=>$addedAt,'tmdb_id'=>$tmdb_id];
         }
         usort($movies, fn($a,$b) => $b['added_at'] <=> $a['added_at']);
     }
@@ -158,6 +164,12 @@ function norm_title(string $t): string {
     $t = str_replace(["\u{2013}", "\u{2014}"], '-', $t);
     $t = preg_replace('/\s+/', ' ', trim($t));
     return strtolower($t);
+}
+
+/** Look up by numeric service ID first (TVDB/TMDB), then fall back to normalised title. */
+function get_action(array &$map, string $title, int $svc_id = 0, string $prefix = 'tvdb'): ?array {
+    if ($svc_id > 0 && isset($map[$prefix.':'.$svc_id])) return $map[$prefix.':'.$svc_id];
+    return $map[norm_title($title)] ?? null;
 }
 
 function match_path_mapping(string $path, array $mappings): array {
@@ -223,6 +235,7 @@ if (!empty($s['sonarr']['url']) && !empty($s['sonarr']['api_key'])) {
                     'size_on_disk' => (int)($sr['statistics']['sizeOnDisk'] ?? $sr['sizeOnDisk'] ?? 0),
                 ];
                 $media_action_map[norm_title($sr['title'] ?? '')] = $entry;
+                if ($entry['ext_id']) $media_action_map['tvdb:'.$entry['ext_id']] = $entry;
                 // Also index alternate titles so Plex/Tautulli name variants match
                 foreach ($sr['alternateTitles'] ?? [] as $alt) {
                     $ak = norm_title($alt['title'] ?? '');
@@ -249,6 +262,7 @@ if (!empty($s['radarr']['url']) && !empty($s['radarr']['api_key'])) {
                     'size_on_disk' => (int)($mv['statistics']['sizeOnDisk'] ?? $mv['sizeOnDisk'] ?? $mv['movieFile']['size'] ?? 0),
                 ];
                 $media_action_map[norm_title($mv['title'] ?? '')] = $entry;
+                if ($entry['ext_id']) $media_action_map['tmdb:'.$entry['ext_id']] = $entry;
                 foreach ($mv['alternateTitles'] ?? [] as $alt) {
                     $ak = norm_title($alt['title'] ?? '');
                     if ($ak !== '' && !isset($media_action_map[$ak])) {
@@ -782,7 +796,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
     <?php endif; ?>
     <div class="sc-tri sc-tri-watched" title="Recently watched"></div>
-    <?= render_dash_action_btns($media_action_map[norm_title($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle) ?>
+    <?= render_dash_action_btns(get_action($media_action_map, $showTitle, $info['tvdb_id'] ?? 0), get_tracked($tracked_map, $showTitle), $showTitle) ?>
   </div>
   <div class="sc-card-body">
     <div class="sc-title" title="<?= htmlspecialchars($showTitle) ?>"><?= htmlspecialchars($showTitle) ?></div>
@@ -810,7 +824,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
     <?php endif; ?>
     <div class="sc-tri sc-tri-new" title="Recently added"></div>
-    <?= render_dash_action_btns($media_action_map[norm_title($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title']) ?>
+    <?= render_dash_action_btns(get_action($media_action_map, $movie['title'], $movie['tmdb_id'] ?? 0, 'tmdb'), get_tracked($tracked_map, $movie['title']), $movie['title']) ?>
   </div>
   <div class="sc-card-body">
     <div class="sc-title" title="<?= htmlspecialchars($movie['title']) ?>">
@@ -847,7 +861,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div style="font-weight:700;color:var(--accent);font-size:.88rem">▶ <?= $info['plays'] ?></div>
       <div style="font-size:.7rem;color:var(--muted)"><?= $info['plays']===1?'play':'plays' ?></div>
     </div>
-    <?= render_dash_action_btns($media_action_map[norm_title($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle, 'dash-row-actions') ?>
+    <?= render_dash_action_btns(get_action($media_action_map, $showTitle, $info['tvdb_id'] ?? 0), get_tracked($tracked_map, $showTitle), $showTitle, 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
   <?php foreach ($movies as $movie): ?>
@@ -869,7 +883,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="ov-meta">Added <?= time_ago($movie['added_at']) ?></div>
     </div>
     <div class="ov-right"><span class="badge badge-green">New</span></div>
-    <?= render_dash_action_btns($media_action_map[norm_title($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title'], 'dash-row-actions') ?>
+    <?= render_dash_action_btns(get_action($media_action_map, $movie['title'], $movie['tmdb_id'] ?? 0, 'tmdb'), get_tracked($tracked_map, $movie['title']), $movie['title'], 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
   <?php if ($totalItems===0): ?><div class="empty">No media found for the last <?= $days ?> days.</div><?php endif; ?>
@@ -937,7 +951,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-plays col-plays" style="font-weight:700;color:var(--accent)"><?= $info['plays'] ?></div>
       <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)"><?= count($info['users']) ?></div>
       <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem"><?= time_ago($info['last_watched']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[norm_title($showTitle)] ?? null, $tr, $showTitle, 'dash-row-actions') ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns(get_action($media_action_map, $showTitle, $info['tvdb_id'] ?? 0), $tr, $showTitle, 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
@@ -971,7 +985,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-plays col-plays" style="color:var(--muted)">—</div>
       <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)">—</div>
       <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem">Added <?= time_ago($movie['added_at']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[norm_title($movie['title'])] ?? null, $tr, $movie['title'], 'dash-row-actions') ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns(get_action($media_action_map, $movie['title'], $movie['tmdb_id'] ?? 0, 'tmdb'), $tr, $movie['title'], 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
