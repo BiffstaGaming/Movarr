@@ -1,13 +1,13 @@
 <?php
 /**
- * Library sync endpoint.
+ * Library / watch-history sync endpoint.
  *
  * Called by:
- *   - Sonarr / Radarr webhooks  →  POST /sync.php?token=XXX
- *   - Dashboard "Sync" button   →  POST /sync.php?token=XXX
- *   - Cron / CLI                →  php sync.php  (token not required)
+ *   - Sonarr / Radarr webhooks  →  POST /sync.php?token=XXX[&type=library]
+ *   - Dashboard sync dropdown   →  POST /sync.php?token=XXX&type=library|tautulli|all
+ *   - Cron / CLI                →  php sync.php [library|tautulli|all]  (token not required)
  *
- * Response: JSON { ok, stats, time }
+ * Response: JSON { ok, type, stats, time }
  */
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -46,11 +46,35 @@ if (PHP_SAPI !== 'cli') {
     header('Content-Type: application/json');
 }
 
-// ── Run sync ──────────────────────────────────────────────────────────────────
-$db    = db_connect();
-$stats = sync_library($db, $s);
+// ── Determine sync type ───────────────────────────────────────────────────────
+// CLI: php sync.php [library|tautulli|all]  (default: library)
+// HTTP: ?type=library|tautulli|all          (default: library)
+$sync_type = PHP_SAPI === 'cli'
+    ? ($argv[1] ?? 'library')
+    : ($_GET['type'] ?? $_POST['type'] ?? 'library');
 
-$out = ['ok' => empty($stats['errors']), 'stats' => $stats, 'time' => date('c')];
+// ── Run sync ──────────────────────────────────────────────────────────────────
+$db     = db_connect();
+$result = [];
+
+if ($sync_type === 'tautulli') {
+    $stats         = sync_tautulli($db, $s);
+    $result['type'] = 'tautulli';
+} elseif ($sync_type === 'all') {
+    $lib_stats = sync_library($db, $s);
+    $tau_stats = sync_tautulli($db, $s);
+    $stats = [
+        'library'  => $lib_stats,
+        'tautulli' => $tau_stats,
+        'errors'   => array_merge($lib_stats['errors'] ?? [], $tau_stats['errors'] ?? []),
+    ];
+    $result['type'] = 'all';
+} else {
+    $stats         = sync_library($db, $s);
+    $result['type'] = 'library';
+}
+
+$out = array_merge($result, ['ok' => empty($stats['errors']), 'stats' => $stats, 'time' => date('c')]);
 
 if (PHP_SAPI === 'cli') {
     echo json_encode($out, JSON_PRETTY_PRINT) . PHP_EOL;

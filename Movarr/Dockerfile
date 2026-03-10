@@ -2,10 +2,16 @@ FROM php:8.3-apache
 
 RUN a2enmod rewrite
 
-# Install SQLite3 system library then enable the PHP PDO driver
-RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev \
+# Install SQLite3 + cron, then enable the PHP PDO driver
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libsqlite3-dev \
+        cron \
     && rm -rf /var/lib/apt/lists/* \
     && docker-php-ext-install pdo_sqlite
+
+# Install the Movarr cron schedule
+COPY cron.d/movarr /etc/cron.d/movarr
+RUN chmod 0644 /etc/cron.d/movarr
 
 COPY index.php   /var/www/html/index.php
 COPY sync.php    /var/www/html/sync.php

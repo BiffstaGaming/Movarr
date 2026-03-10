@@ -1,0 +1,17 @@
+# Movarr scheduled jobs
+# Runs as www-data so it shares the same file/DB permissions as Apache.
+# Logs are appended to /config/cron.log inside the container.
+#
+# To add more jobs, extend this file and rebuild the image, or override
+# the file via a bind-mount in docker-compose.yml:
+#   volumes:
+#     - ./my-crontab:/etc/cron.d/movarr:ro
+
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# ── Library sync (Sonarr + Radarr → media_library) ─── daily at 02:00 ──────
+0 2 * * *  www-data  php /var/www/html/sync.php library  >> /config/cron.log 2>&1
+
+# ── Watch-history sync (Tautulli → last_watched_at) ── daily at 03:00 ──────
+0 3 * * *  www-data  php /var/www/html/sync.php tautulli >> /config/cron.log 2>&1

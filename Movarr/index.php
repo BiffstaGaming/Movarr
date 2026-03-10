@@ -21,7 +21,7 @@ $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $post_action = $_POST['action'] ?? '';
 
-    // Inline sync trigger (dashboard "Sync" button)
+    // Inline sync triggers (dashboard "Sync" dropdown)
     if ($post_action === 'sync_library') {
         try {
             $sdb    = db_connect();
@@ -36,7 +36,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    if ($post_action === 'sync_tautulli') {
+        try {
+            $sdb    = db_connect();
+            $result = sync_tautulli($sdb, $s);
+            if (!empty($result['errors'])) {
+                foreach ($result['errors'] as $e) $errors[] = $e;
+            }
+        } catch (Exception $e) {
+            $errors[] = 'Tautulli sync failed: ' . $e->getMessage();
+        }
+        header('Location: index.php');
+        exit;
+    }
+
     if (in_array($post_action, ['track', 'untrack', 'move_to_fast', 'move_to_slow'])) {
+        $ajax = !empty($_POST['_ajax']);
+        $ajax_error = null;
         try {
             $adb        = db_connect();
             $ext_id     = (int)($_POST['external_id'] ?? 0);
@@ -70,8 +86,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         } catch (Exception $e) {
-            $errors[] = 'Action failed: ' . $e->getMessage();
+            $ajax_error = $e->getMessage();
+            if (!$ajax) $errors[] = 'Action failed: ' . $e->getMessage();
         }
+
+        if ($ajax) {
+            // For move actions the actual file move is queued (not instant), so we
+            // show the intended destination immediately for responsive feedback.
+            $intended_loc = match($post_action) {
+                'move_to_fast' => 'fast',
+                'move_to_slow' => 'slow',
+                default        => $location,
+            };
+            // Re-fetch the updated tracked state for this item
+            $tr_row = null;
+            if (!$ajax_error && isset($adb)) {
+                $stmt = $adb->prepare("
+                    SELECT id, current_location, moved_at, relocate_after, source
+                    FROM tracked_media
+                    WHERE external_id=? AND service=? AND mapping_id=?
+                    LIMIT 1
+                ");
+                $stmt->execute([$ext_id, $service, $mapping_id]);
+                $tr_row = $stmt->fetch() ?: null;
+            }
+            $action_arr = [
+                'ext_id'      => $ext_id,
+                'service'     => $service,
+                'mapping_id'  => $mapping_id,
+                'folder'      => $folder,
+                'location'    => $intended_loc,
+                'media_type'  => $media_type,
+                'size_on_disk'=> $size_on_disk,
+            ];
+            $tr_arr = $tr_row ? [
+                'id'               => (int)$tr_row['id'],
+                'current_location' => $tr_row['current_location'],
+                'moved_at'         => $tr_row['moved_at'],
+                'relocate_after'   => $tr_row['relocate_after'],
+                'source'           => $tr_row['source'],
+            ] : null;
+            $wrap_cls = trim($_POST['wrap_cls'] ?? 'dash-row-actions');
+            header('Content-Type: application/json');
+            echo json_encode([
+                'ok'           => $ajax_error === null,
+                'error'        => $ajax_error,
+                'buttons_html' => render_dash_action_btns($action_arr, $tr_arr, $a_title, $wrap_cls),
+                'location'     => $intended_loc,
+                'tracked'      => $tr_arr ? '1' : '0',
+            ]);
+            exit;
+        }
+
         header('Location: index.php');
         exit;
     }
@@ -80,7 +146,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ── Load library from DB ──────────────────────────────────────────────────────
 $db        = db_connect();
 $lib_count = (int)$db->query("SELECT COUNT(*) FROM media_library")->fetchColumn();
-$last_synced = (int)($db->query("SELECT MAX(synced_at) FROM media_library")->fetchColumn() ?: 0);
+
+// Sync state (library + tautulli last-synced timestamps)
+$_sync_state        = read_sync_state();
+$last_lib_synced    = (int)($_sync_state['library_synced_at']  ?? 0);
+$last_tau_synced    = (int)($_sync_state['tautulli_synced_at'] ?? 0);
 
 $library_rows = $lib_count ? $db->query("
     SELECT ml.*,
@@ -578,9 +648,12 @@ layout_start('Library', 'dashboard', $extra_head);
 </div>
 <?php endif; ?>
 
-<!-- ── Sync form (hidden, submitted by JS sync button) ── -->
-<form id="sync-form" method="post" style="display:none">
+<!-- ── Sync forms (hidden, submitted by JS sync dropdown) ── -->
+<form id="sync-library-form" method="post" style="display:none">
   <input type="hidden" name="action" value="sync_library">
+</form>
+<form id="sync-tautulli-form" method="post" style="display:none">
+  <input type="hidden" name="action" value="sync_tautulli">
 </form>
 
 <!-- ── Toolbar ── -->
@@ -591,23 +664,43 @@ layout_start('Library', 'dashboard', $extra_head);
       <span id="visible-count"><?= $totalItems ?></span>&nbsp;items
     </div>
     <div class="sc-sync-info">
-      <?php if ($last_synced): ?>
-        Last synced <?= time_ago($last_synced) ?>
+      <?php if ($last_lib_synced): ?>
+        Library: <?= time_ago($last_lib_synced) ?>
       <?php else: ?>
-        Not yet synced
+        Library: never synced
+      <?php endif; ?>
+    </div>
+    <div class="sc-sync-info">
+      <?php if ($last_tau_synced): ?>
+        Watched: <?= time_ago($last_tau_synced) ?>
+      <?php else: ?>
+        Watched: never synced
       <?php endif; ?>
     </div>
   </div>
 
   <div class="sc-toolbar-right">
 
-    <!-- Sync -->
-    <button class="sc-tb-btn sc-tb-sync" onclick="triggerSync()" title="Sync library from Sonarr & Radarr">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
-      </svg>
-      <span class="lbl">Sync</span>
-    </button>
+    <!-- Sync dropdown -->
+    <div class="sc-menu-wrap">
+      <button class="sc-tb-btn sc-tb-sync" onclick="toggleMenu('sync-menu')" title="Sync">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+        </svg>
+        <span class="lbl">Sync</span>
+      </button>
+      <div class="sc-menu" id="sync-menu" style="right:0;left:auto;">
+        <div class="sc-menu-lbl">Sync</div>
+        <button class="sc-menu-item" onclick="triggerSync('library')">
+          Sync Library
+          <span style="font-size:.7rem;color:var(--muted);margin-left:.5rem;">Sonarr &amp; Radarr</span>
+        </button>
+        <button class="sc-menu-item" onclick="triggerSync('tautulli')">
+          Sync Watch History
+          <span style="font-size:.7rem;color:var(--muted);margin-left:.5rem;">Tautulli</span>
+        </button>
+      </div>
+    </div>
 
     <!-- Options (column visibility) -->
     <button class="sc-tb-btn" id="btn-options" onclick="openOptions()" title="Options">
@@ -853,11 +946,11 @@ layout_start('Library', 'dashboard', $extra_head);
     </div>
     <div class="ov-right">
       <?php if ($loc === 'fast'): ?>
-        <span class="storage-fast" style="font-size:.78rem">Fast</span>
+        <span class="storage-fast js-loc" style="font-size:.78rem">Fast</span>
       <?php elseif ($loc === 'slow'): ?>
-        <span class="storage-slow" style="font-size:.78rem">Slow</span>
+        <span class="storage-slow js-loc" style="font-size:.78rem">Slow</span>
       <?php else: ?>
-        <span style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
+        <span class="js-loc" style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
       <?php endif; ?>
     </div>
     <?= render_dash_action_btns($action, $tr, $row['title'], 'dash-row-actions') ?>
@@ -894,11 +987,11 @@ layout_start('Library', 'dashboard', $extra_head);
     </div>
     <div class="ov-right">
       <?php if ($loc === 'fast'): ?>
-        <span class="storage-fast" style="font-size:.78rem">Fast</span>
+        <span class="storage-fast js-loc" style="font-size:.78rem">Fast</span>
       <?php elseif ($loc === 'slow'): ?>
-        <span class="storage-slow" style="font-size:.78rem">Slow</span>
+        <span class="storage-slow js-loc" style="font-size:.78rem">Slow</span>
       <?php else: ?>
-        <span style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
+        <span class="js-loc" style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
       <?php endif; ?>
     </div>
     <?= render_dash_action_btns($action, $tr, $row['title'], 'dash-row-actions') ?>
@@ -958,9 +1051,9 @@ layout_start('Library', 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600"><?= htmlspecialchars($row['title']) ?></div>
       <div class="sc-tbl-cell sc-tbl-type"><span class="badge badge-muted" style="font-size:.68rem">TV</span></div>
       <div class="sc-tbl-cell sc-tbl-location col-location">
-        <?php if ($loc === 'fast'): ?><span class="loc-fast">Fast</span>
-        <?php elseif ($loc === 'slow'): ?><span class="loc-slow">Slow</span>
-        <?php else: ?><span class="loc-unmapped">—</span><?php endif; ?>
+        <?php if ($loc === 'fast'): ?><span class="loc-fast js-loc">Fast</span>
+        <?php elseif ($loc === 'slow'): ?><span class="loc-slow js-loc">Slow</span>
+        <?php else: ?><span class="loc-unmapped js-loc">—</span><?php endif; ?>
       </div>
       <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
       <div class="sc-tbl-cell sc-tbl-watched  col-watched"  style="color:var(--muted);font-size:.82rem"><?= fmt_watched($watched ?: null) ?></div>
@@ -991,9 +1084,9 @@ layout_start('Library', 'dashboard', $extra_head);
       </div>
       <div class="sc-tbl-cell sc-tbl-type"><span class="badge" style="font-size:.68rem;background:rgba(160,90,219,.12);color:#a05adb">Movie</span></div>
       <div class="sc-tbl-cell sc-tbl-location col-location">
-        <?php if ($loc === 'fast'): ?><span class="loc-fast">Fast</span>
-        <?php elseif ($loc === 'slow'): ?><span class="loc-slow">Slow</span>
-        <?php else: ?><span class="loc-unmapped">—</span><?php endif; ?>
+        <?php if ($loc === 'fast'): ?><span class="loc-fast js-loc">Fast</span>
+        <?php elseif ($loc === 'slow'): ?><span class="loc-slow js-loc">Slow</span>
+        <?php else: ?><span class="loc-unmapped js-loc">—</span><?php endif; ?>
       </div>
       <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
       <div class="sc-tbl-cell sc-tbl-watched  col-watched"  style="color:var(--muted);font-size:.82rem"><?= fmt_watched($watched ?: null) ?></div>
@@ -1036,22 +1129,70 @@ layout_start('Library', 'dashboard', $extra_head);
 
 <script>
 function submitDashAction(btn) {
-  var d = btn.dataset;
-  document.getElementById('daf-action').value     = d.action;
-  document.getElementById('daf-ext-id').value     = d.extId;
-  document.getElementById('daf-service').value    = d.service;
-  document.getElementById('daf-mapping-id').value = d.mappingId;
-  document.getElementById('daf-title').value      = d.title;
-  document.getElementById('daf-folder').value     = d.folder;
-  document.getElementById('daf-location').value   = d.location;
-  document.getElementById('daf-media-type').value = d.mediaType;
-  document.getElementById('daf-track-id').value   = d.trackId || '';
-  document.getElementById('daf-size').value       = d.sizeOnDisk || '0';
-  document.getElementById('dash-action-form').submit();
+  var d         = btn.dataset;
+  var container = btn.closest('.dash-card-actions, .dash-row-actions');
+  var row       = container && container.closest('[data-location]');
+
+  // Disable all buttons in this container while the request is in flight
+  var btns = container ? container.querySelectorAll('button') : [];
+  btns.forEach(function(b) { b.disabled = true; b.style.opacity = '0.5'; });
+
+  var form = new FormData();
+  form.append('_ajax',           '1');
+  form.append('action',          d.action);
+  form.append('external_id',     d.extId    || '');
+  form.append('service',         d.service  || '');
+  form.append('mapping_id',      d.mappingId|| '');
+  form.append('title',           d.title    || '');
+  form.append('folder',          d.folder   || '');
+  form.append('current_location',d.location || '');
+  form.append('media_type',      d.mediaType|| '');
+  form.append('track_id',        d.trackId  || '');
+  form.append('size_on_disk',    d.sizeOnDisk||'0');
+  form.append('wrap_cls',        container ? container.className : 'dash-row-actions');
+
+  fetch('index.php', { method: 'POST', body: form })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok) {
+        btns.forEach(function(b) { b.disabled = false; b.style.opacity = ''; });
+        console.error('Action failed:', data.error);
+        return;
+      }
+      // Replace button container with freshly-rendered HTML from server
+      if (container && data.buttons_html !== undefined) {
+        var tmp = document.createElement('div');
+        tmp.innerHTML = data.buttons_html;
+        var newNode = tmp.firstElementChild;
+        if (newNode) container.replaceWith(newNode);
+      }
+      // Update parent row/card data attributes and location badge
+      if (row) {
+        if (data.location) {
+          row.dataset.location = data.location;
+          row.dataset.storage  = data.location === 'fast' ? '1' : '0';
+          // Update location badge if present in this row
+          var badge = row.querySelector('.js-loc');
+          if (badge) {
+            var isFast = data.location === 'fast', isSlow = data.location === 'slow';
+            // Support both table (loc-*) and overview (storage-fast/slow) class names
+            badge.className   = (isFast ? 'loc-fast storage-fast' : isSlow ? 'loc-slow storage-slow' : 'loc-unmapped') + ' js-loc';
+            badge.textContent = isFast ? 'Fast' : isSlow ? 'Slow' : '—';
+            if (!isFast && !isSlow) badge.style.cssText = 'font-size:.78rem;color:rgba(255,255,255,.2)';
+            else badge.style.cssText = 'font-size:.78rem';
+          }
+        }
+        if (data.tracked !== undefined) row.dataset.tracked = data.tracked;
+      }
+    })
+    .catch(function() {
+      btns.forEach(function(b) { b.disabled = false; b.style.opacity = ''; });
+    });
 }
 
-function triggerSync() {
-  document.getElementById('sync-form').submit();
+function triggerSync(type) {
+  var formId = type === 'tautulli' ? 'sync-tautulli-form' : 'sync-library-form';
+  document.getElementById(formId).submit();
 }
 
 (function() {
@@ -1253,18 +1394,5 @@ function triggerSync() {
 })();
 </script>
 
-<!-- Shared dashboard action form -->
-<form id="dash-action-form" method="post" style="display:none">
-  <input type="hidden" name="action"           id="daf-action">
-  <input type="hidden" name="external_id"      id="daf-ext-id">
-  <input type="hidden" name="service"          id="daf-service">
-  <input type="hidden" name="mapping_id"       id="daf-mapping-id">
-  <input type="hidden" name="title"            id="daf-title">
-  <input type="hidden" name="folder"           id="daf-folder">
-  <input type="hidden" name="current_location" id="daf-location">
-  <input type="hidden" name="media_type"       id="daf-media-type">
-  <input type="hidden" name="track_id"         id="daf-track-id">
-  <input type="hidden" name="size_on_disk"     id="daf-size">
-</form>
 
 <?php layout_end(); ?>
