@@ -620,11 +620,29 @@ $extra_head = <<<'CSS'
 .dash-row-actions .dash-act-btn { flex: none; padding: 2px 6px; font-size: .65rem; }
 .sc-tbl-actions .dash-act-btn { flex: none; padding: 2px 5px; font-size: .65rem; }
 
+/* ── Search field ── */
+.tb-search {
+  position: relative; display: flex; align-items: center;
+  margin: 0 6px;
+}
+.tb-search svg {
+  position: absolute; left: .55rem; top: 50%;
+  transform: translateY(-50%); color: var(--muted); pointer-events: none;
+}
+.tb-search input {
+  padding-left: 1.9rem; width: 200px; font-size: .83rem;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); height: 32px;
+  color: var(--text); outline: none;
+}
+.tb-search input:focus { border-color: var(--accent); }
+
 @media(max-width:700px) {
   .sc-toolbar { margin: -1rem -1rem 1rem; }
   .sc-grid { grid-template-columns: repeat(auto-fill, minmax(110px,1fr)); gap:4px; }
   .sc-tb-btn { padding: 0 8px; min-width: 40px; font-size:.55rem; }
   .sc-sync-info { display: none; }
+  .tb-search input { width: 120px; }
 }
 </style>
 <style id="col-vis-style"></style>
@@ -643,6 +661,12 @@ layout_start('Library', 'dashboard', $extra_head);
 <div class="sc-toolbar">
 
   <div class="sc-toolbar-left">
+    <div class="tb-search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+      </svg>
+      <input type="text" id="search-input" placeholder="Search titles…" autocomplete="off">
+    </div>
     <div class="sc-item-count">
       <span id="visible-count"><?= $totalItems ?></span>&nbsp;items
     </div>
@@ -1327,10 +1351,15 @@ function pollSyncCompletion(stateKey, beforeTs) {
     return asc ? av - bv : bv - av;
   }
 
+  var searchInput = document.getElementById('search-input');
+
   function isVisible(el) {
+    var q       = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    var title   = el.dataset.title || '';
     var type    = el.dataset.type    || '';
     var loc     = el.dataset.location|| '';
     var tracked = el.dataset.tracked || '0';
+    if (q && !title.includes(q))               return false;
     if (!filters.shows    && type === 'show')      return false;
     if (!filters.movies   && type === 'movie')     return false;
     if (!filters.fast     && loc  === 'fast')      return false;
@@ -1403,6 +1432,8 @@ function pollSyncCompletion(stateKey, beforeTs) {
     var arrow = th.querySelector('.th-arrow');
     if (arrow) arrow.textContent = sortDirs[currentSort] ? '↑' : '↓';
   });
+
+  if (searchInput) searchInput.addEventListener('input', applyAll);
 
   applyAll();
 })();

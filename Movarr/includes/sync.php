@@ -281,9 +281,13 @@ function sync_tautulli(PDO $db, array $s): array
     };
 
     // ── TV Shows (episode history, grouped by grandparent) ────────────────────
-    $show_map  = []; // tvdb_id (int) => max Unix timestamp
-    $plex_show = []; // grandparent_rating_key => max timestamp (unresolved plex://)
-    $start     = 0;
+    $show_map    = []; // tvdb_id (int) => max Unix timestamp
+    $plex_show   = []; // grandparent_rating_key => max timestamp (unresolved plex://)
+    $start       = 0;
+    $ep_total    = 0;
+    $ep_no_rk    = 0;
+    $first_date  = 0;
+    $last_date   = 0;
 
     do {
         $stats['api_calls']++;
@@ -298,18 +302,32 @@ function sync_tautulli(PDO $db, array $s): array
             sync_log('Episode history fetch failed', 'ERROR');
             break;
         }
+        // Log total on first page so we know what Tautulli says the full set is
+        if ($start === 0) {
+            sync_log(sprintf('Episode history: recordsFiltered=%s recordsTotal=%s cutoff=%s',
+                $data['recordsFiltered'] ?? '?', $data['recordsTotal'] ?? '?', $cutoff));
+        }
         $records = $data['data'] ?? [];
         foreach ($records as $r) {
+            $ep_total++;
             $date = (int)($r['date'] ?? 0);
-            if (!$date) continue;
+            if (!$date) { $ep_no_rk++; continue; }
+            if (!$first_date || $date < $first_date) $first_date = $date;
+            if ($date > $last_date) $last_date = $date;
             // grandparent_guid is not returned by get_history — always resolve via rating_key
             $rk = (string)($r['grandparent_rating_key'] ?? '');
-            if ($rk && (!isset($plex_show[$rk]) || $date > $plex_show[$rk])) $plex_show[$rk] = $date;
+            if (!$rk || $rk === '0') { $ep_no_rk++; continue; }
+            if (!isset($plex_show[$rk]) || $date > $plex_show[$rk]) $plex_show[$rk] = $date;
         }
         $start += $page_size;
     } while (count($records) === $page_size);
 
-    sync_log(sprintf('Episode history: %d show rating keys to resolve', count($plex_show)));
+    sync_log(sprintf(
+        'Episode history: %d records, %d skipped (no rk), %d unique shows, date range %s–%s',
+        $ep_total, $ep_no_rk, count($plex_show),
+        $first_date ? date('Y-m-d', $first_date) : '—',
+        $last_date  ? date('Y-m-d', $last_date)  : '—'
+    ));
 
     // Resolve show rating_keys → TVDb IDs via get_metadata
     $resolved = 0; $unresolved = 0; $sample_fail = '';
