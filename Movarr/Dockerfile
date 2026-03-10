@@ -22,6 +22,7 @@ COPY manual.php  /var/www/html/manual.php
 COPY history.php /var/www/html/history.php
 COPY health.php  /var/www/html/health.php
 COPY tracked.php /var/www/html/tracked.php
+COPY tasks.php   /var/www/html/tasks.php
 COPY includes/   /var/www/html/includes/
 COPY images/     /var/www/html/images/
 
