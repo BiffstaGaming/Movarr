@@ -14,6 +14,45 @@ require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/db.php';
 
 $s           = load_settings();
+
+// ── Dashboard action handler ───────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $post_action = $_POST['action'] ?? '';
+    if (in_array($post_action, ['track', 'move_to_fast', 'move_to_slow'])) {
+        try {
+            $adb        = db_connect();
+            $ext_id     = (int)($_POST['external_id'] ?? 0);
+            $service    = in_array($_POST['service'] ?? '', ['sonarr','radarr']) ? $_POST['service'] : 'sonarr';
+            $mapping_id = trim($_POST['mapping_id'] ?? '');
+            $a_title    = trim($_POST['title'] ?? '');
+            $location   = trim($_POST['current_location'] ?? 'unknown');
+            $folder     = trim($_POST['folder'] ?? '');
+            $media_type = trim($_POST['media_type'] ?? 'show');
+
+            if ($ext_id && $mapping_id) {
+                if ($post_action === 'track') {
+                    $adb->prepare(
+                        "INSERT OR IGNORE INTO tracked_media
+                         (media_type,title,external_id,service,mapping_id,folder,current_location,source,created_at,updated_at)
+                         VALUES (?,?,?,?,?,?,?,'manual',?,?)"
+                    )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,time(),time()]);
+                } else {
+                    $direction = $post_action === 'move_to_fast' ? 'to_fast' : 'to_slow';
+                    db_queue_move($adb, $ext_id, $service, $mapping_id, $direction, 'Queued from dashboard', $a_title);
+                    file_put_contents(manual_trigger_file(), date('c'));
+                    $adb->prepare(
+                        "INSERT OR IGNORE INTO tracked_media
+                         (media_type,title,external_id,service,mapping_id,folder,current_location,source,created_at,updated_at)
+                         VALUES (?,?,?,?,?,?,?,'manual',?,?)"
+                    )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,time(),time()]);
+                }
+            }
+        } catch (Exception $e) {}
+        header('Location: index.php');
+        exit;
+    }
+}
+
 $tautulliUrl = rtrim($s['tautulli']['url'], '/');
 $apiKey      = $s['tautulli']['api_key'];
 $apiBase     = $tautulliUrl . '/api/v2';
@@ -105,9 +144,83 @@ function time_ago(int $ts): string {
     return round($diff/86400).'d ago';
 }
 
+function match_path_mapping(string $path, array $mappings): array {
+    foreach ($mappings as $m) {
+        $fast = rtrim($m['fast_path_mover'] ?? '', '/');
+        $slow = rtrim($m['slow_path_mover'] ?? '', '/');
+        if ($fast !== '' && ($path === $fast || str_starts_with($path, $fast.'/'))) return [$m['id'], 'fast'];
+        if ($slow !== '' && ($path === $slow || str_starts_with($path, $slow.'/'))) return [$m['id'], 'slow'];
+    }
+    return ['', 'unknown'];
+}
+
+function render_dash_action_btns(?array $action, ?array $tr, string $title, string $wrap_cls = 'dash-card-actions'): string {
+    if (!$action || empty($action['ext_id'])) return '';
+    $loc  = $tr ? ($tr['current_location'] ?? 'unknown') : $action['location'];
+    $base = ' data-ext-id="'.htmlspecialchars((string)$action['ext_id']).'"'
+          . ' data-service="'.htmlspecialchars($action['service']).'"'
+          . ' data-mapping-id="'.htmlspecialchars($action['mapping_id']).'"'
+          . ' data-title="'.htmlspecialchars($title, ENT_QUOTES).'"'
+          . ' data-folder="'.htmlspecialchars($action['folder'], ENT_QUOTES).'"'
+          . ' data-location="'.htmlspecialchars($action['location']).'"'
+          . ' data-media-type="'.htmlspecialchars($action['media_type']).'"'
+          . ' onclick="submitDashAction(this)"';
+    $out = '<div class="'.htmlspecialchars($wrap_cls).'">';
+    if (!$tr) {
+        $out .= '<button class="dash-act-btn act-track" data-action="track"'.$base.'>Track</button>';
+    }
+    if ($loc !== 'fast') {
+        $out .= '<button class="dash-act-btn act-fast" data-action="move_to_fast"'.$base.'>→&nbsp;Fast</button>';
+    }
+    if ($loc !== 'slow') {
+        $out .= '<button class="dash-act-btn act-slow" data-action="move_to_slow"'.$base.'>←&nbsp;Slow</button>';
+    }
+    $out .= '</div>';
+    return $out;
+}
+
 $totalShows  = count($tvShows);
 $totalMovies = count($movies);
 $totalItems  = $totalShows + $totalMovies;
+
+// ── Sonarr / Radarr lookup for action data ────────────────────────────────────
+$media_action_map = [];
+$_mappings = $s['path_mappings'] ?? [];
+
+if (!empty($s['sonarr']['url']) && !empty($s['sonarr']['api_key'])) {
+    $ctx = stream_context_create(['http'=>['timeout'=>6,'header'=>'X-Api-Key: '.$s['sonarr']['api_key']."\r\n"]]);
+    $raw = @file_get_contents(rtrim($s['sonarr']['url'],'/')  .'/api/v3/series', false, $ctx);
+    if ($raw) {
+        foreach (json_decode($raw, true) ?: [] as $sr) {
+            $path = $sr['path'] ?? '';
+            [$map_id, $loc] = match_path_mapping($path, $_mappings);
+            if ($map_id) {
+                $media_action_map[strtolower($sr['title'] ?? '')] = [
+                    'ext_id' => (int)($sr['tvdbId'] ?? 0), 'service' => 'sonarr',
+                    'mapping_id' => $map_id, 'folder' => basename($path),
+                    'location' => $loc, 'media_type' => 'show',
+                ];
+            }
+        }
+    }
+}
+if (!empty($s['radarr']['url']) && !empty($s['radarr']['api_key'])) {
+    $ctx = stream_context_create(['http'=>['timeout'=>6,'header'=>'X-Api-Key: '.$s['radarr']['api_key']."\r\n"]]);
+    $raw = @file_get_contents(rtrim($s['radarr']['url'],'/')  .'/api/v3/movie', false, $ctx);
+    if ($raw) {
+        foreach (json_decode($raw, true) ?: [] as $mv) {
+            $path = $mv['path'] ?? '';
+            [$map_id, $loc] = match_path_mapping($path, $_mappings);
+            if ($map_id) {
+                $media_action_map[strtolower($mv['title'] ?? '')] = [
+                    'ext_id' => (int)($mv['tmdbId'] ?? 0), 'service' => 'radarr',
+                    'mapping_id' => $map_id, 'folder' => basename($path),
+                    'location' => $loc, 'media_type' => 'movie',
+                ];
+            }
+        }
+    }
+}
 
 // ── Extra CSS ─────────────────────────────────────────────────────────────────
 $extra_head = <<<'CSS'
@@ -429,6 +542,29 @@ $extra_head = <<<'CSS'
 
 .sc-empty { grid-column:1/-1;text-align:center;padding:4rem 2rem;color:var(--muted);font-size:.9rem; }
 
+/* ── Dashboard action buttons ── */
+.dash-card-actions {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 3;
+  background: linear-gradient(transparent, rgba(0,0,0,.88));
+  display: flex; gap: 3px; padding: 14px 5px 5px;
+  opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.sc-card:hover .dash-card-actions { opacity: 1; pointer-events: all; }
+.dash-act-btn {
+  flex: 1; padding: 4px 3px;
+  font-size: .6rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  background: rgba(15,15,25,.7); border: 1px solid rgba(255,255,255,.15); border-radius: 3px;
+  color: var(--text); cursor: pointer; white-space: nowrap; transition: background .1s;
+}
+.dash-act-btn:hover { background: rgba(60,60,80,.9); }
+.dash-act-btn.act-fast  { color: var(--green); border-color: var(--green); }
+.dash-act-btn.act-slow  { color: var(--muted); }
+.dash-act-btn.act-track { color: var(--accent); border-color: var(--accent); }
+.dash-row-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; margin-left: .5rem; }
+.dash-row-actions .dash-act-btn { flex: none; padding: 3px 8px; font-size: .68rem; }
+.sc-tbl-actions { flex: 0 0 130px; min-width: 100px; justify-content: flex-end; }
+.sc-tbl-actions .dash-act-btn { flex: none; padding: 3px 7px; font-size: .68rem; }
+
 @media(max-width:700px) {
   .sc-toolbar { margin: -1rem -1rem 1rem; }
   .sc-grid { grid-template-columns: repeat(auto-fill, minmax(110px,1fr)); gap:4px; }
@@ -607,6 +743,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
     <?php endif; ?>
     <div class="sc-tri sc-tri-watched" title="Recently watched"></div>
+    <?= render_dash_action_btns($media_action_map[strtolower($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle) ?>
   </div>
   <div class="sc-card-body">
     <div class="sc-title" title="<?= htmlspecialchars($showTitle) ?>"><?= htmlspecialchars($showTitle) ?></div>
@@ -634,6 +771,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       </div>
     <?php endif; ?>
     <div class="sc-tri sc-tri-new" title="Recently added"></div>
+    <?= render_dash_action_btns($media_action_map[strtolower($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title']) ?>
   </div>
   <div class="sc-card-body">
     <div class="sc-title" title="<?= htmlspecialchars($movie['title']) ?>">
@@ -670,6 +808,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div style="font-weight:700;color:var(--accent);font-size:.88rem">▶ <?= $info['plays'] ?></div>
       <div style="font-size:.7rem;color:var(--muted)"><?= $info['plays']===1?'play':'plays' ?></div>
     </div>
+    <?= render_dash_action_btns($media_action_map[strtolower($showTitle)] ?? null, get_tracked($tracked_map, $showTitle), $showTitle, 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
   <?php foreach ($movies as $movie): ?>
@@ -691,6 +830,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="ov-meta">Added <?= time_ago($movie['added_at']) ?></div>
     </div>
     <div class="ov-right"><span class="badge badge-green">New</span></div>
+    <?= render_dash_action_btns($media_action_map[strtolower($movie['title'])] ?? null, get_tracked($tracked_map, $movie['title']), $movie['title'], 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
   <?php if ($totalItems===0): ?><div class="empty">No media found for the last <?= $days ?> days.</div><?php endif; ?>
@@ -727,6 +867,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-date col-date sort-col" data-col="date" onclick="setSort('date',null)">
         Date <span class="th-arrow">↑</span>
       </div>
+      <div class="sc-tbl-cell sc-tbl-actions"></div>
     </div>
 
     <!-- TV Show rows -->
@@ -757,6 +898,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-plays col-plays" style="font-weight:700;color:var(--accent)"><?= $info['plays'] ?></div>
       <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)"><?= count($info['users']) ?></div>
       <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem"><?= time_ago($info['last_watched']) ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[strtolower($showTitle)] ?? null, $tr, $showTitle, 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
@@ -790,6 +932,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
       <div class="sc-tbl-cell sc-tbl-plays col-plays" style="color:var(--muted)">—</div>
       <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)">—</div>
       <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem">Added <?= time_ago($movie['added_at']) ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($media_action_map[strtolower($movie['title'])] ?? null, $tr, $movie['title'], 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
@@ -829,6 +972,19 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
 </div>
 
 <script>
+function submitDashAction(btn) {
+  var d = btn.dataset;
+  document.getElementById('daf-action').value     = d.action;
+  document.getElementById('daf-ext-id').value     = d.extId;
+  document.getElementById('daf-service').value    = d.service;
+  document.getElementById('daf-mapping-id').value = d.mappingId;
+  document.getElementById('daf-title').value      = d.title;
+  document.getElementById('daf-folder').value     = d.folder;
+  document.getElementById('daf-location').value   = d.location;
+  document.getElementById('daf-media-type').value = d.mediaType;
+  document.getElementById('dash-action-form').submit();
+}
+
 (function() {
   // ── State ──
   var currentView   = 'poster';
@@ -1058,5 +1214,17 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
   applyAll();
 })();
 </script>
+
+<!-- Shared dashboard action form (submitted by JS) -->
+<form id="dash-action-form" method="post" style="display:none">
+  <input type="hidden" name="action"           id="daf-action">
+  <input type="hidden" name="external_id"      id="daf-ext-id">
+  <input type="hidden" name="service"          id="daf-service">
+  <input type="hidden" name="mapping_id"       id="daf-mapping-id">
+  <input type="hidden" name="title"            id="daf-title">
+  <input type="hidden" name="folder"           id="daf-folder">
+  <input type="hidden" name="current_location" id="daf-location">
+  <input type="hidden" name="media_type"       id="daf-media-type">
+</form>
 
 <?php layout_end(); ?>

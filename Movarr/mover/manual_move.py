@@ -322,6 +322,8 @@ def preflight_disk(dst_base: Path, size_bytes: int, title: str,
         log.warning('DISK SPACE: %s', msg)
         health_upsert(issue_id, 'error', 'Insufficient disk space', msg)
         return False
+    log.info('Preflight disk OK: %s — need %s, have %s free',
+             dst_base, _fmt_bytes(size_bytes), _fmt_bytes(free))
     health_clear(issue_id)
     return True
 
