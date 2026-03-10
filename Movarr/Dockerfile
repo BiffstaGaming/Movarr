@@ -13,6 +13,7 @@ COPY logs.php    /var/www/html/logs.php
 COPY queue.php   /var/www/html/queue.php
 COPY manual.php  /var/www/html/manual.php
 COPY history.php /var/www/html/history.php
+COPY health.php  /var/www/html/health.php
 COPY tracked.php /var/www/html/tracked.php
 COPY includes/   /var/www/html/includes/
 COPY images/     /var/www/html/images/
