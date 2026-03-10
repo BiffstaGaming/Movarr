@@ -139,34 +139,45 @@ if ($apiKey) {
     $guid_cache_dirty = false;
     $now = time();
 
-    $resolve_guid = function(string $rk, string $pattern) use ($apiBase, $apiKey, &$guid_cache, &$guid_cache_dirty, $now): int {
-        if (!$rk) return 0;
-        $ckey = $pattern[0] . ':' . $rk; // 't:ratingkey' or 'm:ratingkey'
-        if (isset($guid_cache[$ckey]) && $guid_cache[$ckey]['exp'] > $now) return (int)$guid_cache[$ckey]['id'];
+    $resolve_guid = function(string $rk, string $pattern) use ($apiBase, $apiKey, &$guid_cache, &$guid_cache_dirty, $now): array {
+        if (!$rk) return [0, 'no rating_key', []];
+        $ckey = $pattern[0] . ':' . $rk;
+        if (isset($guid_cache[$ckey]) && $guid_cache[$ckey]['exp'] > $now) return [(int)$guid_cache[$ckey]['id'], 'cache', []];
         $meta = tautulli_get($apiBase, $apiKey, 'get_metadata', ['rating_key' => $rk]);
-        $id = 0;
+        $id = 0; $raw_guids = [];
         if ($meta) {
+            foreach ($meta['guids'] ?? [] as $g) $raw_guids[] = $g['id'] ?? '';
             foreach ($meta['guids'] ?? [] as $g) {
                 if (preg_match($pattern, $g['id'] ?? '', $gm)) { $id = (int)$gm[1]; break; }
             }
             if (!$id) {
-                if (preg_match($pattern, $meta['guid'] ?? '', $gm)) $id = (int)$gm[1];
+                $gs = $meta['guid'] ?? '';
+                if ($gs) $raw_guids[] = $gs;
+                if (preg_match($pattern, $gs, $gm)) $id = (int)$gm[1];
             }
+        } else {
+            $raw_guids[] = '(get_metadata failed)';
         }
         $guid_cache[$ckey] = ['id' => $id, 'exp' => $now + 86400];
         $guid_cache_dirty = true;
-        return $id;
+        return [$id, 'api', $raw_guids];
     };
 
     foreach ($tvShows as $show => &$info) {
         if (!$info['tvdb_id'] && $info['rating_key']) {
-            $info['tvdb_id'] = $resolve_guid($info['rating_key'], '/(?:thetvdb|tvdb):\/\/(\d+)/i');
+            [$info['tvdb_id'], $info['_guid_src'], $info['_raw_guids']] = $resolve_guid($info['rating_key'], '/(?:thetvdb|tvdb):\/\/(\d+)/i');
+        } else {
+            $info['_guid_src']  = $info['tvdb_id'] ? 'history' : 'no rating_key';
+            $info['_raw_guids'] = [];
         }
     }
     unset($info);
     foreach ($movies as &$movie) {
         if (!$movie['tmdb_id'] && ($movie['rating_key'] ?? '')) {
-            $movie['tmdb_id'] = $resolve_guid($movie['rating_key'], '/(?:themoviedb|tmdb):\/\/(\d+)/i');
+            [$movie['tmdb_id'], $movie['_guid_src'], $movie['_raw_guids']] = $resolve_guid($movie['rating_key'], '/(?:themoviedb|tmdb):\/\/(\d+)/i');
+        } else {
+            $movie['_guid_src']  = $movie['tmdb_id'] ? 'history' : 'no rating_key';
+            $movie['_raw_guids'] = [];
         }
     }
     unset($movie);
@@ -324,6 +335,69 @@ if (!empty($s['radarr']['url']) && !empty($s['radarr']['api_key'])) {
             }
         }
     }
+}
+
+// ── Debug page (?debug=1) ─────────────────────────────────────────────────────
+if (isset($_GET['debug'])) {
+    // Collect Sonarr raw data for path-mapping diagnosis
+    $dbg_sonarr = [];
+    if (!empty($s['sonarr']['url']) && !empty($s['sonarr']['api_key'])) {
+        $ctx2 = stream_context_create(['http'=>['timeout'=>6,'header'=>'X-Api-Key: '.$s['sonarr']['api_key']."\r\n"]]);
+        $raw2 = @file_get_contents(rtrim($s['sonarr']['url'],'/')  .'/api/v3/series', false, $ctx2);
+        foreach (json_decode($raw2 ?: '[]', true) ?: [] as $sr) {
+            $path2 = $sr['path'] ?? '';
+            [$mid, $mloc] = match_path_mapping($path2, $_mappings);
+            $dbg_sonarr[] = ['title'=>$sr['title']??'','tvdbId'=>$sr['tvdbId']??0,'path'=>$path2,'map_id'=>$mid,'loc'=>$mloc];
+        }
+    }
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Movarr Debug</title>';
+    echo '<style>body{font-family:monospace;font-size:13px;background:#111;color:#ddd;padding:1rem}';
+    echo 'table{border-collapse:collapse;width:100%;margin-bottom:2rem}th,td{border:1px solid #333;padding:4px 8px;text-align:left}th{background:#222}';
+    echo '.ok{color:#4caf50}.warn{color:#ff9800}.err{color:#f44336}</style></head><body>';
+
+    // ── TV Shows table ──
+    echo '<h2>TV Shows ('.count($tvShows).')</h2>';
+    echo '<table><tr><th>Tautulli Title</th><th>Rating Key</th><th>TVDB ID</th><th>GUID source</th><th>Raw GUIDs from metadata</th><th>Action found?</th></tr>';
+    foreach ($tvShows as $show => $info) {
+        $tvdb = (int)($info['tvdb_id'] ?? 0);
+        $act  = get_action($media_action_map, $show, $tvdb);
+        $has  = $act ? '<span class="ok">YES — '.$act['service'].' ext_id='.$act['ext_id'].' map_id='.$act['mapping_id'].' loc='.$act['location'].'</span>'
+                     : '<span class="err">NO</span>';
+        $guids_str = htmlspecialchars(implode(', ', $info['_raw_guids'] ?? []));
+        $src   = htmlspecialchars($info['_guid_src'] ?? '');
+        $tvdb_cls = $tvdb ? 'ok' : 'err';
+        echo '<tr>';
+        echo '<td>'.htmlspecialchars($show).'</td>';
+        echo '<td>'.htmlspecialchars($info['rating_key']).'</td>';
+        echo '<td class="'.$tvdb_cls.'">'.$tvdb.'</td>';
+        echo '<td>'.$src.'</td>';
+        echo '<td>'.$guids_str.'</td>';
+        echo '<td>'.$has.'</td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+
+    // ── Sonarr series path-mapping table ──
+    echo '<h2>Sonarr Series — Path Mapping Results ('.count($dbg_sonarr).' total)</h2>';
+    echo '<p style="color:#aaa">Path mappings configured: ';
+    foreach ($_mappings as $pm) echo htmlspecialchars('fast='.$pm['fast_path_mover'].' slow='.$pm['slow_path_mover']).' | ';
+    echo '</p>';
+    echo '<table><tr><th>Sonarr Title</th><th>TVDB ID</th><th>Path</th><th>Matched map_id</th><th>Location</th></tr>';
+    foreach ($dbg_sonarr as $row) {
+        $cls = $row['map_id'] ? 'ok' : 'err';
+        echo '<tr>';
+        echo '<td>'.htmlspecialchars($row['title']).'</td>';
+        echo '<td>'.(int)$row['tvdbId'].'</td>';
+        echo '<td>'.htmlspecialchars($row['path']).'</td>';
+        echo '<td class="'.$cls.'">'.htmlspecialchars($row['map_id'] ?: 'NO MATCH').'</td>';
+        echo '<td>'.htmlspecialchars($row['loc']).'</td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+
+    echo '</body></html>';
+    exit;
 }
 
 // ── Extra CSS ─────────────────────────────────────────────────────────────────
