@@ -1,7 +1,7 @@
 <?php
 // layout_start($title, $active) - outputs html/head/sidebar/nav up to content div
 // layout_end() - closes everything
-// $active: 'dashboard', 'config', 'queue', 'history', 'logs', 'manual', 'tracked'
+// $active: 'dashboard', 'config', 'queue', 'history', 'logs', 'manual', 'tracked', 'health'
 
 function layout_start(string $title, string $active, string $extra_head = ''): void {
     // Grouped nav: type='item' = standalone link, type='group' = expandable parent
@@ -19,6 +19,7 @@ function layout_start(string $title, string $active, string $extra_head = ''): v
         ['type' => 'group', 'key' => 'system', 'label' => 'System',
             'icon' => '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM4 15V9h16v6H4zm8-4a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM6 11h2v2H6zm8 0h4v2h-4z"/></svg>',
             'children' => [
+                ['key' => 'health', 'href' => 'health.php', 'label' => 'Status'],
                 ['key' => 'logs',   'href' => 'logs.php',   'label' => 'Logs'],
                 ['key' => 'config', 'href' => 'config.php', 'label' => 'Settings'],
             ],

@@ -33,6 +33,7 @@ SETTINGS_FILE = CONFIG_DIR / 'settings.json'
 LOG_FILE      = CONFIG_DIR / 'mover.log'
 QUEUE_FILE    = CONFIG_DIR / 'queue.json'
 DB_FILE       = CONFIG_DIR / 'movarr.db'
+HEALTH_FILE   = CONFIG_DIR / 'health.json'
 
 
 # -- Logging -------------------------------------------------------------------
@@ -212,6 +213,77 @@ def folder_size_bytes(path) -> int:
     except Exception:
         pass
     return total
+
+
+# ── Health issue tracking ─────────────────────────────────────────────────────
+
+def _health_load() -> list:
+    try:
+        return json.loads(HEALTH_FILE.read_text())
+    except Exception:
+        return []
+
+
+def health_upsert(issue_id: str, level: str, title: str, message: str) -> None:
+    issues = _health_load()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for issue in issues:
+        if issue['id'] == issue_id:
+            issue.update(level=level, title=title, message=message, updated_at=now)
+            try:
+                HEALTH_FILE.write_text(json.dumps(issues, indent=2))
+            except Exception:
+                pass
+            return
+    issues.append({'id': issue_id, 'level': level, 'title': title,
+                   'message': message, 'raised_at': now, 'updated_at': now})
+    try:
+        HEALTH_FILE.write_text(json.dumps(issues, indent=2))
+    except Exception:
+        pass
+
+
+def health_clear(issue_id: str) -> None:
+    issues = [i for i in _health_load() if i['id'] != issue_id]
+    try:
+        HEALTH_FILE.write_text(json.dumps(issues, indent=2))
+    except Exception:
+        pass
+
+
+def _fmt_bytes(b: int) -> str:
+    if b >= 1_099_511_627_776:
+        return f'{b / 1_099_511_627_776:.1f} TB'
+    if b >= 1_073_741_824:
+        return f'{b / 1_073_741_824:.1f} GB'
+    if b >= 1_048_576:
+        return f'{b / 1_048_576:.1f} MB'
+    return f'{b} B'
+
+
+def preflight_disk(dst_base: Path, size_bytes: int, title: str,
+                   log: logging.Logger) -> bool:
+    """Check free space on dst_base's filesystem before a real move.
+
+    Returns True (ok to proceed) or False (blocked — not enough space).
+    Raises a health issue when blocked; clears it when space is sufficient.
+    """
+    issue_id = f'disk_space:{dst_base}'
+    check = dst_base
+    while not check.exists() and check != check.parent:
+        check = check.parent
+    try:
+        free = shutil.disk_usage(str(check)).free
+    except Exception:
+        return True  # Cannot determine — allow the move
+    if size_bytes > free:
+        msg = (f'Cannot move "{title}" ({_fmt_bytes(size_bytes)}) to {dst_base}'
+               f' — only {_fmt_bytes(free)} free')
+        log.warning('DISK SPACE: %s', msg)
+        health_upsert(issue_id, 'error', 'Insufficient disk space', msg)
+        return False
+    health_clear(issue_id)
+    return True
 
 
 def db_record_history(db: sqlite3.Connection, media_type: str, title: str,
@@ -724,6 +796,9 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
             queue.skip(q_idx, 'Source not found on disk')
             return
         size_bytes = folder_size_bytes(src)
+        if not dry_run and not preflight_disk(dst_base, size_bytes, series['title'], log):
+            queue.skip(q_idx, 'Insufficient disk space')
+            return
         queue.start(q_idx)
         t_start = time.time()
         cb = lambda pct, done, spd: queue.update_progress(q_idx, pct, done, size_bytes, spd)
@@ -837,6 +912,9 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
             queue.skip(q_idx, 'Source not found on disk')
             return
         size_bytes = folder_size_bytes(src)
+        if not dry_run and not preflight_disk(dst_base, size_bytes, movie['title'], log):
+            queue.skip(q_idx, 'Insufficient disk space')
+            return
         queue.start(q_idx)
         t_start = time.time()
         cb = lambda pct, done, spd: queue.update_progress(q_idx, pct, done, size_bytes, spd)
