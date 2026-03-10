@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev 
     && docker-php-ext-install pdo_sqlite
 
 COPY index.php   /var/www/html/index.php
+COPY sync.php    /var/www/html/sync.php
 COPY config.php  /var/www/html/config.php
 COPY logs.php    /var/www/html/logs.php
 COPY queue.php   /var/www/html/queue.php

@@ -3,9 +3,22 @@
  * SQLite database helpers for Movarr.
  *
  * Tables:
+ *   media_library  – local cache of all Sonarr/Radarr titles with path/location info
  *   tracked_media  – source of truth for what's on fast storage and when it expires
  *   pending_moves  – manual move requests waiting to be processed by mover.py
  */
+
+/**
+ * Normalise a title for fuzzy matching between Tautulli, Sonarr, and Radarr.
+ * Converts Unicode apostrophes/quotes/dashes to ASCII and collapses whitespace.
+ */
+function norm_title(string $t): string {
+    $t = str_replace(["\u{2019}", "\u{2018}", "\u{0060}", "\u{00B4}", "\u{02BC}"], "'", $t);
+    $t = str_replace(["\u{201C}", "\u{201D}", "\u{00AB}", "\u{00BB}"], '"', $t);
+    $t = str_replace(["\u{2013}", "\u{2014}"], '-', $t);
+    $t = preg_replace('/\s+/', ' ', trim($t));
+    return strtolower($t);
+}
 
 function db_connect(): PDO
 {
@@ -22,6 +35,28 @@ function db_connect(): PDO
 function db_migrate(PDO $db): void
 {
     $db->exec("
+        CREATE TABLE IF NOT EXISTS media_library (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            service      TEXT    NOT NULL,
+            service_id   INTEGER NOT NULL,
+            external_id  INTEGER NOT NULL DEFAULT 0,
+            title        TEXT    NOT NULL DEFAULT '',
+            title_norm   TEXT    NOT NULL DEFAULT '',
+            alt_titles   TEXT    NOT NULL DEFAULT '[]',
+            year         INTEGER DEFAULT NULL,
+            path         TEXT    NOT NULL DEFAULT '',
+            folder       TEXT    NOT NULL DEFAULT '',
+            mapping_id   TEXT    NOT NULL DEFAULT '',
+            location     TEXT    NOT NULL DEFAULT 'unmapped',
+            size_on_disk INTEGER NOT NULL DEFAULT 0,
+            status       TEXT    NOT NULL DEFAULT '',
+            genres       TEXT    NOT NULL DEFAULT '[]',
+            poster_url   TEXT    NOT NULL DEFAULT '',
+            last_watched_at INTEGER DEFAULT NULL,
+            synced_at    INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(service, service_id)
+        );
+
         CREATE TABLE IF NOT EXISTS tracked_media (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             media_type       TEXT    NOT NULL,

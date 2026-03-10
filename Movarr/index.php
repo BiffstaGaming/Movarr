@@ -12,12 +12,30 @@ if (file_exists($envFile)) {
 require_once __DIR__ . '/includes/settings.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/db.php';
+require_once __DIR__ . '/includes/sync.php';
 
-$s           = load_settings();
+$s      = load_settings();
+$errors = [];
 
-// ── Dashboard action handler ───────────────────────────────────────────────────
+// ── POST handler ──────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $post_action = $_POST['action'] ?? '';
+
+    // Inline sync trigger (dashboard "Sync" button)
+    if ($post_action === 'sync_library') {
+        try {
+            $sdb    = db_connect();
+            $result = sync_library($sdb, $s);
+            if ($result['errors']) {
+                foreach ($result['errors'] as $e) $errors[] = $e;
+            }
+        } catch (Exception $e) {
+            $errors[] = 'Sync failed: ' . $e->getMessage();
+        }
+        header('Location: index.php');
+        exit;
+    }
+
     if (in_array($post_action, ['track', 'untrack', 'move_to_fast', 'move_to_slow'])) {
         try {
             $adb        = db_connect();
@@ -51,165 +69,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     )->execute([$media_type,$a_title,$ext_id,$service,$mapping_id,$folder,$location,$size_on_disk,time(),time()]);
                 }
             }
-        } catch (Exception $e) {}
+        } catch (Exception $e) {
+            $errors[] = 'Action failed: ' . $e->getMessage();
+        }
         header('Location: index.php');
         exit;
     }
 }
 
-$tautulliUrl = rtrim($s['tautulli']['url'], '/');
-$apiKey      = $s['tautulli']['api_key'];
-$apiBase     = $tautulliUrl . '/api/v2';
-$days        = (int)$s['watched_days'];
-$cutoff      = time() - ($days * 86400);
+// ── Load library from DB ──────────────────────────────────────────────────────
+$db        = db_connect();
+$lib_count = (int)$db->query("SELECT COUNT(*) FROM media_library")->fetchColumn();
+$last_synced = (int)($db->query("SELECT MAX(synced_at) FROM media_library")->fetchColumn() ?: 0);
 
-function tautulli_get(string $base, string $key, string $cmd, array $params = []): ?array {
-    $params = array_merge(['apikey' => $key, 'cmd' => $cmd], $params);
-    $url = $base . '?' . http_build_query($params);
-    $ctx = stream_context_create(['http' => ['timeout' => 15]]);
-    $raw = @file_get_contents($url, false, $ctx);
-    if ($raw === false) return null;
-    $data = json_decode($raw, true);
-    return ($data['response']['result'] === 'success') ? $data['response']['data'] : null;
+$library_rows = $lib_count ? $db->query("
+    SELECT ml.*,
+           tm.id               AS track_id,
+           tm.current_location AS tracked_location,
+           tm.moved_at,
+           tm.relocate_after,
+           tm.source           AS track_source
+    FROM media_library ml
+    LEFT JOIN tracked_media tm
+           ON tm.external_id = ml.external_id
+          AND tm.service      = ml.service
+          AND tm.mapping_id   = ml.mapping_id
+    ORDER BY ml.last_watched_at IS NULL ASC,
+             ml.last_watched_at DESC,
+             ml.title ASC
+")->fetchAll() : [];
+
+$tvShows = array_values(array_filter($library_rows, fn($r) => $r['service'] === 'sonarr'));
+$movies  = array_values(array_filter($library_rows, fn($r) => $r['service'] === 'radarr'));
+
+$totalShows  = count($tvShows);
+$totalMovies = count($movies);
+$totalItems  = $totalShows + $totalMovies;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Build an $action array from a media_library row (for render_dash_action_btns). */
+function row_to_action(array $row): ?array {
+    if (empty($row['mapping_id'])) return null;
+    return [
+        'ext_id'      => (int)$row['external_id'],
+        'service'     => $row['service'],
+        'mapping_id'  => $row['mapping_id'],
+        'folder'      => $row['folder'],
+        'location'    => $row['location'],
+        'media_type'  => $row['service'] === 'sonarr' ? 'show' : 'movie',
+        'size_on_disk'=> (int)$row['size_on_disk'],
+    ];
 }
 
-$errors = [];
-
-// ── TV Shows ──────────────────────────────────────────────────────────────────
-$tvShows = [];
-if ($apiKey) {
-    $start = 0; $pageSize = 1000;
-    while (true) {
-        $history = tautulli_get($apiBase, $apiKey, 'get_history', [
-            'media_type' => 'episode', 'length' => $pageSize,
-            'start' => $start, 'after' => date('Y-m-d', $cutoff),
-        ]);
-        if ($history === null) { $errors[] = 'Failed to fetch watch history from Tautulli.'; break; }
-        $records = $history['data'] ?? [];
-        foreach ($records as $r) {
-            $show = $r['grandparent_title'] ?? 'Unknown Show';
-            if (!isset($tvShows[$show])) {
-                $tvdb_id = 0;
-                $guid = $r['grandparent_guid'] ?? '';
-                if (preg_match('/(?:thetvdb|tvdb):\/\/(\d+)/i', $guid, $gm)) $tvdb_id = (int)$gm[1];
-                $tvShows[$show] = ['plays'=>0,'users'=>[],'rating_key'=>$r['grandparent_rating_key']??'','last_watched'=>0,'tvdb_id'=>$tvdb_id];
-            }
-            $tvShows[$show]['plays']++;
-            $tvShows[$show]['users'][$r['user'] ?? 'Unknown'] = true;
-            $tvShows[$show]['last_watched'] = max($tvShows[$show]['last_watched'], $r['date'] ?? 0);
-        }
-        if (count($records) < $pageSize) break;
-        $start += $pageSize;
-    }
-    uasort($tvShows, fn($a,$b) => $b['plays'] <=> $a['plays']);
-} else {
-    $errors[] = 'TAUTULLI_API_KEY is not set. <a href="config.php" style="color:var(--accent)">Go to Config</a>';
+/** Build a $tr (tracked) array from a media_library row with JOIN fields. */
+function row_to_tracked(array $row): ?array {
+    if (empty($row['track_id'])) return null;
+    return [
+        'id'               => (int)$row['track_id'],
+        'current_location' => $row['tracked_location'] ?? 'unknown',
+        'moved_at'         => $row['moved_at'],
+        'relocate_after'   => $row['relocate_after'],
+        'source'           => $row['track_source'] ?? '',
+    ];
 }
 
-// ── Movies ────────────────────────────────────────────────────────────────────
-$movies = [];
-if ($apiKey) {
-    $data = tautulli_get($apiBase, $apiKey, 'get_recently_added', ['media_type'=>'movie','count'=>100]);
-    if ($data === null) { $errors[] = 'Failed to fetch recently added movies.'; }
-    else {
-        foreach ($data['recently_added'] ?? [] as $m) {
-            $addedAt = (int)($m['added_at'] ?? 0);
-            if ($addedAt < $cutoff) continue;
-            $tmdb_id = 0;
-            $guid = $m['guid'] ?? '';
-            if (preg_match('/(?:themoviedb|tmdb):\/\/(\d+)/i', $guid, $gm)) $tmdb_id = (int)$gm[1];
-            $movies[] = ['title'=>$m['title']??'Unknown','year'=>$m['year']??'','thumb'=>$m['thumb']??'','added_at'=>$addedAt,'tmdb_id'=>$tmdb_id,'rating_key'=>$m['rating_key']??''];
-        }
-        usort($movies, fn($a,$b) => $b['added_at'] <=> $a['added_at']);
-    }
-}
-
-// ── Tautulli metadata fallback: resolve TVDB/TMDB IDs for plex:// GUIDs ──────
-// When Plex uses the new agent (plex://show/...), history records don't contain a
-// parseable TVDB ID.  get_metadata for the show/movie rating key always returns the
-// full guids array with tvdb:// and tmdb:// entries.
-// Results are cached in a JSON file for 24 h to avoid N API calls on every load.
-if ($apiKey) {
-    $guid_cache_file = config_base() . '/guid_cache.json';
-    $guid_cache = [];
-    if (file_exists($guid_cache_file)) {
-        $gc = json_decode(@file_get_contents($guid_cache_file), true);
-        if (is_array($gc)) $guid_cache = $gc;
-    }
-    $guid_cache_dirty = false;
-    $now = time();
-
-    $resolve_guid = function(string $rk, string $pattern) use ($apiBase, $apiKey, &$guid_cache, &$guid_cache_dirty, $now): array {
-        if (!$rk) return [0, 'no rating_key', []];
-        $ckey = $pattern[0] . ':' . $rk;
-        if (isset($guid_cache[$ckey]) && $guid_cache[$ckey]['exp'] > $now) return [(int)$guid_cache[$ckey]['id'], 'cache', []];
-        $meta = tautulli_get($apiBase, $apiKey, 'get_metadata', ['rating_key' => $rk]);
-        $id = 0; $raw_guids = [];
-        if ($meta) {
-            foreach ($meta['guids'] ?? [] as $g) $raw_guids[] = $g['id'] ?? '';
-            foreach ($meta['guids'] ?? [] as $g) {
-                if (preg_match($pattern, $g['id'] ?? '', $gm)) { $id = (int)$gm[1]; break; }
-            }
-            if (!$id) {
-                $gs = $meta['guid'] ?? '';
-                if ($gs) $raw_guids[] = $gs;
-                if (preg_match($pattern, $gs, $gm)) $id = (int)$gm[1];
-            }
-        } else {
-            $raw_guids[] = '(get_metadata failed)';
-        }
-        $guid_cache[$ckey] = ['id' => $id, 'exp' => $now + 86400];
-        $guid_cache_dirty = true;
-        return [$id, 'api', $raw_guids];
-    };
-
-    foreach ($tvShows as $show => &$info) {
-        if (!$info['tvdb_id'] && $info['rating_key']) {
-            [$info['tvdb_id'], $info['_guid_src'], $info['_raw_guids']] = $resolve_guid($info['rating_key'], '/(?:thetvdb|tvdb):\/\/(\d+)/i');
-        } else {
-            $info['_guid_src']  = $info['tvdb_id'] ? 'history' : 'no rating_key';
-            $info['_raw_guids'] = [];
-        }
-    }
-    unset($info);
-    foreach ($movies as &$movie) {
-        if (!$movie['tmdb_id'] && ($movie['rating_key'] ?? '')) {
-            [$movie['tmdb_id'], $movie['_guid_src'], $movie['_raw_guids']] = $resolve_guid($movie['rating_key'], '/(?:themoviedb|tmdb):\/\/(\d+)/i');
-        } else {
-            $movie['_guid_src']  = $movie['tmdb_id'] ? 'history' : 'no rating_key';
-            $movie['_raw_guids'] = [];
-        }
-    }
-    unset($movie);
-
-    if ($guid_cache_dirty) {
-        @file_put_contents($guid_cache_file, json_encode($guid_cache));
-    }
-}
-
-// ── Cross-reference with tracked_media ───────────────────────────────────────
-$tracked_map = [];
-try {
-    $tdb = db_connect();
-    foreach (db_all_tracked($tdb) as $tr) {
-        $key = norm_title($tr['title'] ?? '');
-        if ($key !== '') $tracked_map[$key] = $tr;
-    }
-} catch (Exception $e) {}
-
-function get_tracked(array &$map, string $title): ?array {
-    return $map[norm_title($title)] ?? null;
-}
-function fmt_storage(?array $tr): string {
-    if (!$tr) return '—';
-    return $tr['current_location'] === 'fast' ? 'Fast' : 'Slow';
-}
 function fmt_movedate(?array $tr): string {
-    // Only show a date if the item has been moved AND has a future relocate schedule
     if (!$tr || !$tr['moved_at'] || $tr['relocate_after'] === null) return '—';
     if ($tr['relocate_after'] < time()) return '—';
     return date('Y-m-d', $tr['relocate_after']);
 }
+
 function time_ago(int $ts): string {
     $diff = time() - $ts;
     if ($diff < 3600)  return round($diff/60).'m ago';
@@ -217,32 +147,16 @@ function time_ago(int $ts): string {
     return round($diff/86400).'d ago';
 }
 
-/**
- * Normalise a title for fuzzy matching between Tautulli and Sonarr/Radarr.
- * Converts Unicode apostrophes/quotes to ASCII and collapses whitespace.
- */
-function norm_title(string $t): string {
-    $t = str_replace(["\u{2019}", "\u{2018}", "\u{0060}", "\u{00B4}", "\u{02BC}"], "'", $t);
-    $t = str_replace(["\u{201C}", "\u{201D}", "\u{00AB}", "\u{00BB}"], '"', $t);
-    $t = str_replace(["\u{2013}", "\u{2014}"], '-', $t);
-    $t = preg_replace('/\s+/', ' ', trim($t));
-    return strtolower($t);
+function fmt_watched(?int $ts): string {
+    if (!$ts) return 'Never';
+    return time_ago($ts);
 }
 
-/** Look up by numeric service ID first (TVDB/TMDB), then fall back to normalised title. */
-function get_action(array &$map, string $title, int $svc_id = 0, string $prefix = 'tvdb'): ?array {
-    if ($svc_id > 0 && isset($map[$prefix.':'.$svc_id])) return $map[$prefix.':'.$svc_id];
-    return $map[norm_title($title)] ?? null;
-}
-
-function match_path_mapping(string $path, array $mappings): array {
-    foreach ($mappings as $m) {
-        $fast = rtrim($m['fast_path_mover'] ?? '', '/');
-        $slow = rtrim($m['slow_path_mover'] ?? '', '/');
-        if ($fast !== '' && ($path === $fast || str_starts_with($path, $fast.'/'))) return [$m['id'], 'fast'];
-        if ($slow !== '' && ($path === $slow || str_starts_with($path, $slow.'/'))) return [$m['id'], 'slow'];
-    }
-    return ['', 'unknown'];
+function fmt_bytes(int $bytes): string {
+    if ($bytes <= 0) return '—';
+    $u = ['B','KB','MB','GB','TB']; $i = 0;
+    while ($bytes >= 1024 && $i < 4) { $bytes /= 1024; $i++; }
+    return round($bytes, 1) . ' ' . $u[$i];
 }
 
 function render_dash_action_btns(?array $action, ?array $tr, string $title, string $wrap_cls = 'dash-card-actions'): string {
@@ -275,130 +189,12 @@ function render_dash_action_btns(?array $action, ?array $tr, string $title, stri
     return $out;
 }
 
-$totalShows  = count($tvShows);
-$totalMovies = count($movies);
-$totalItems  = $totalShows + $totalMovies;
-
-// ── Sonarr / Radarr lookup for action data ────────────────────────────────────
-$media_action_map = [];
-$_mappings = $s['path_mappings'] ?? [];
-
-if (!empty($s['sonarr']['url']) && !empty($s['sonarr']['api_key'])) {
-    $ctx = stream_context_create(['http'=>['timeout'=>6,'header'=>'X-Api-Key: '.$s['sonarr']['api_key']."\r\n"]]);
-    $raw = @file_get_contents(rtrim($s['sonarr']['url'],'/')  .'/api/v3/series', false, $ctx);
-    if ($raw) {
-        foreach (json_decode($raw, true) ?: [] as $sr) {
-            $path = $sr['path'] ?? '';
-            [$map_id, $loc] = match_path_mapping($path, $_mappings);
-            if ($map_id) {
-                $entry = [
-                    'ext_id' => (int)($sr['tvdbId'] ?? 0), 'service' => 'sonarr',
-                    'mapping_id' => $map_id, 'folder' => basename($path),
-                    'location' => $loc, 'media_type' => 'show',
-                    'size_on_disk' => (int)($sr['statistics']['sizeOnDisk'] ?? $sr['sizeOnDisk'] ?? 0),
-                ];
-                $media_action_map[norm_title($sr['title'] ?? '')] = $entry;
-                if ($entry['ext_id']) $media_action_map['tvdb:'.$entry['ext_id']] = $entry;
-                // Also index alternate titles so Plex/Tautulli name variants match
-                foreach ($sr['alternateTitles'] ?? [] as $alt) {
-                    $ak = norm_title($alt['title'] ?? '');
-                    if ($ak !== '' && !isset($media_action_map[$ak])) {
-                        $media_action_map[$ak] = $entry;
-                    }
-                }
-            }
-        }
-    }
+// ── Sync token (for webhook instructions) ─────────────────────────────────────
+if (empty($s['sync_token'])) {
+    $s['sync_token'] = bin2hex(random_bytes(16));
+    save_settings($s);
 }
-if (!empty($s['radarr']['url']) && !empty($s['radarr']['api_key'])) {
-    $ctx = stream_context_create(['http'=>['timeout'=>6,'header'=>'X-Api-Key: '.$s['radarr']['api_key']."\r\n"]]);
-    $raw = @file_get_contents(rtrim($s['radarr']['url'],'/')  .'/api/v3/movie', false, $ctx);
-    if ($raw) {
-        foreach (json_decode($raw, true) ?: [] as $mv) {
-            $path = $mv['path'] ?? '';
-            [$map_id, $loc] = match_path_mapping($path, $_mappings);
-            if ($map_id) {
-                $entry = [
-                    'ext_id' => (int)($mv['tmdbId'] ?? 0), 'service' => 'radarr',
-                    'mapping_id' => $map_id, 'folder' => basename($path),
-                    'location' => $loc, 'media_type' => 'movie',
-                    'size_on_disk' => (int)($mv['statistics']['sizeOnDisk'] ?? $mv['sizeOnDisk'] ?? $mv['movieFile']['size'] ?? 0),
-                ];
-                $media_action_map[norm_title($mv['title'] ?? '')] = $entry;
-                if ($entry['ext_id']) $media_action_map['tmdb:'.$entry['ext_id']] = $entry;
-                foreach ($mv['alternateTitles'] ?? [] as $alt) {
-                    $ak = norm_title($alt['title'] ?? '');
-                    if ($ak !== '' && !isset($media_action_map[$ak])) {
-                        $media_action_map[$ak] = $entry;
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── Debug page (?debug=1) ─────────────────────────────────────────────────────
-if (isset($_GET['debug'])) {
-    // Collect Sonarr raw data for path-mapping diagnosis
-    $dbg_sonarr = [];
-    if (!empty($s['sonarr']['url']) && !empty($s['sonarr']['api_key'])) {
-        $ctx2 = stream_context_create(['http'=>['timeout'=>6,'header'=>'X-Api-Key: '.$s['sonarr']['api_key']."\r\n"]]);
-        $raw2 = @file_get_contents(rtrim($s['sonarr']['url'],'/')  .'/api/v3/series', false, $ctx2);
-        foreach (json_decode($raw2 ?: '[]', true) ?: [] as $sr) {
-            $path2 = $sr['path'] ?? '';
-            [$mid, $mloc] = match_path_mapping($path2, $_mappings);
-            $dbg_sonarr[] = ['title'=>$sr['title']??'','tvdbId'=>$sr['tvdbId']??0,'path'=>$path2,'map_id'=>$mid,'loc'=>$mloc];
-        }
-    }
-    header('Content-Type: text/html; charset=utf-8');
-    echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Movarr Debug</title>';
-    echo '<style>body{font-family:monospace;font-size:13px;background:#111;color:#ddd;padding:1rem}';
-    echo 'table{border-collapse:collapse;width:100%;margin-bottom:2rem}th,td{border:1px solid #333;padding:4px 8px;text-align:left}th{background:#222}';
-    echo '.ok{color:#4caf50}.warn{color:#ff9800}.err{color:#f44336}</style></head><body>';
-
-    // ── TV Shows table ──
-    echo '<h2>TV Shows ('.count($tvShows).')</h2>';
-    echo '<table><tr><th>Tautulli Title</th><th>Rating Key</th><th>TVDB ID</th><th>GUID source</th><th>Raw GUIDs from metadata</th><th>Action found?</th></tr>';
-    foreach ($tvShows as $show => $info) {
-        $tvdb = (int)($info['tvdb_id'] ?? 0);
-        $act  = get_action($media_action_map, $show, $tvdb);
-        $has  = $act ? '<span class="ok">YES — '.$act['service'].' ext_id='.$act['ext_id'].' map_id='.$act['mapping_id'].' loc='.$act['location'].'</span>'
-                     : '<span class="err">NO</span>';
-        $guids_str = htmlspecialchars(implode(', ', $info['_raw_guids'] ?? []));
-        $src   = htmlspecialchars($info['_guid_src'] ?? '');
-        $tvdb_cls = $tvdb ? 'ok' : 'err';
-        echo '<tr>';
-        echo '<td>'.htmlspecialchars($show).'</td>';
-        echo '<td>'.htmlspecialchars($info['rating_key']).'</td>';
-        echo '<td class="'.$tvdb_cls.'">'.$tvdb.'</td>';
-        echo '<td>'.$src.'</td>';
-        echo '<td>'.$guids_str.'</td>';
-        echo '<td>'.$has.'</td>';
-        echo '</tr>';
-    }
-    echo '</table>';
-
-    // ── Sonarr series path-mapping table ──
-    echo '<h2>Sonarr Series — Path Mapping Results ('.count($dbg_sonarr).' total)</h2>';
-    echo '<p style="color:#aaa">Path mappings configured: ';
-    foreach ($_mappings as $pm) echo htmlspecialchars('fast='.$pm['fast_path_mover'].' slow='.$pm['slow_path_mover']).' | ';
-    echo '</p>';
-    echo '<table><tr><th>Sonarr Title</th><th>TVDB ID</th><th>Path</th><th>Matched map_id</th><th>Location</th></tr>';
-    foreach ($dbg_sonarr as $row) {
-        $cls = $row['map_id'] ? 'ok' : 'err';
-        echo '<tr>';
-        echo '<td>'.htmlspecialchars($row['title']).'</td>';
-        echo '<td>'.(int)$row['tvdbId'].'</td>';
-        echo '<td>'.htmlspecialchars($row['path']).'</td>';
-        echo '<td class="'.$cls.'">'.htmlspecialchars($row['map_id'] ?: 'NO MATCH').'</td>';
-        echo '<td>'.htmlspecialchars($row['loc']).'</td>';
-        echo '</tr>';
-    }
-    echo '</table>';
-
-    echo '</body></html>';
-    exit;
-}
+$sync_token = $s['sync_token'];
 
 // ── Extra CSS ─────────────────────────────────────────────────────────────────
 $extra_head = <<<'CSS'
@@ -411,7 +207,6 @@ $extra_head = <<<'CSS'
   height: 60px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  /* Bleed to content edges */
   margin: -1.5rem -1.5rem 1.25rem;
   padding: 0 .75rem;
 }
@@ -421,7 +216,6 @@ $extra_head = <<<'CSS'
   gap: 0;
 }
 
-/* Toolbar button: icon on top, label below — exact Sonarr PageToolbarButton spec */
 .sc-tb-btn {
   display: flex;
   flex-direction: column;
@@ -451,8 +245,6 @@ $extra_head = <<<'CSS'
   line-height: 1;
   white-space: nowrap;
 }
-
-/* Small blue indicator dot (used on filter when active) */
 .sc-tb-indicator {
   position: absolute;
   top: 9px; right: 8px;
@@ -472,7 +264,12 @@ $extra_head = <<<'CSS'
   align-self: center;
 }
 
-/* ── Dropdown menus (right-aligned, dark, Sonarr style) ── */
+/* ── Sync button (wider to fit label) ── */
+.sc-tb-btn.sc-tb-sync { width: 56px; }
+.sc-tb-btn.sc-tb-sync.syncing { color: var(--accent); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Dropdown menus ── */
 .sc-menu-wrap { position: relative; }
 .sc-menu {
   display: none;
@@ -503,14 +300,17 @@ $extra_head = <<<'CSS'
 .sc-menu-item:hover { background: rgba(255,255,255,.06); color: var(--text); }
 .sc-menu-item .mi-check { visibility: hidden; flex-shrink: 0; }
 .sc-menu-item.selected .mi-check { visibility: visible; color: var(--accent); }
-/* Sort direction icon (replaces check) */
 .sc-menu-item .mi-sortdir { visibility: hidden; flex-shrink: 0; color: var(--muted); }
 .sc-menu-item.selected .mi-sortdir { visibility: visible; }
 .sc-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
-/* Filter checkboxes */
+.sc-menu-lbl {
+  padding: 8px 20px 4px;
+  font-size: .65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .09em; color: var(--muted);
+}
 .sc-filter-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 20px; cursor: pointer;
+  padding: 8px 20px; cursor: pointer;
   font-size: .875rem; color: var(--muted);
   transition: background .1s;
   white-space: nowrap;
@@ -521,7 +321,7 @@ $extra_head = <<<'CSS'
   cursor: pointer; flex-shrink: 0;
 }
 
-/* ── Options Modal (column visibility) ── */
+/* ── Options Modal ── */
 .sc-modal-overlay {
   display: none;
   position: fixed; inset: 0; z-index: 900;
@@ -533,8 +333,7 @@ $extra_head = <<<'CSS'
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 4px;
-  width: 400px;
-  max-width: 92vw;
+  width: 400px; max-width: 92vw;
   box-shadow: 0 8px 32px rgba(0,0,0,.6);
 }
 .sc-modal-hdr {
@@ -573,14 +372,23 @@ $extra_head = <<<'CSS'
   display: flex; justify-content: flex-end;
 }
 
-/* ── Item count ── */
+/* ── Item count + sync info ── */
+.sc-toolbar-left { gap: 0; }
 .sc-item-count {
   display: flex; align-items: center;
   padding: 0 12px;
   font-size: .78rem; color: var(--muted); white-space: nowrap;
 }
+.sc-sync-info {
+  display: flex; align-items: center;
+  padding: 0 12px;
+  font-size: .72rem; color: var(--muted); white-space: nowrap;
+  border-left: 1px solid var(--border);
+}
+.sc-sync-info a { color: var(--muted); text-decoration: none; }
+.sc-sync-info a:hover { color: var(--accent); }
 
-/* ── Poster grid (NO bars — triangles only) ── */
+/* ── Poster grid ── */
 .sc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(162px,1fr));
@@ -616,15 +424,13 @@ $extra_head = <<<'CSS'
   color: rgba(255,255,255,.85); text-align: center;
   word-break: break-word; pointer-events: none;
 }
-/* Status triangle (top-right, Sonarr border trick) */
 .sc-tri {
   position: absolute; top: 0; right: 0; z-index: 1;
   width: 0; height: 0; border-style: solid; border-width: 0 22px 22px 0;
 }
-.sc-tri-watched { border-color: transparent var(--accent)  transparent transparent; }
-.sc-tri-new     { border-color: transparent var(--green)   transparent transparent; }
+.sc-tri-fast    { border-color: transparent var(--accent) transparent transparent; }
+.sc-tri-watched { border-color: transparent var(--green)  transparent transparent; }
 
-/* Card body */
 .sc-card-body { padding: 5px 6px 7px; background: var(--surface); }
 .sc-title {
   font-size: .8rem; font-weight: 600; text-align: center;
@@ -652,7 +458,7 @@ $extra_head = <<<'CSS'
 .ov-info { flex:1;min-width:0; }
 .ov-title { font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .ov-meta  { font-size:.75rem;color:var(--muted);margin-top:2px; }
-.ov-right { flex-shrink:0;text-align:right; }
+.ov-right { flex-shrink:0;text-align:right;min-width:60px; }
 
 /* ── Sonarr-style flex table ── */
 #tbl-view { display: none; }
@@ -685,25 +491,24 @@ $extra_head = <<<'CSS'
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Column widths — % with min-width so nothing truncates */
 .sc-tbl-title    { flex: 1 1 auto; min-width: 140px; }
-.sc-tbl-type     { flex: 0 0 7%;  min-width: 52px; }
-.sc-tbl-storage  { flex: 0 0 8%;  min-width: 56px; }
-.sc-tbl-movedate { flex: 0 0 14%; min-width: 105px; }
-.sc-tbl-plays    { flex: 0 0 7%;  min-width: 50px; text-align: right; }
-.sc-tbl-viewers  { flex: 0 0 8%;  min-width: 56px; text-align: right; }
-.sc-tbl-date     { flex: 0 0 10%; min-width: 72px; }
-/* Sortable header cells */
+.sc-tbl-type     { flex: 0 0 7%;   min-width: 52px; }
+.sc-tbl-location { flex: 0 0 7%;   min-width: 54px; }
+.sc-tbl-movedate { flex: 0 0 13%;  min-width: 100px; }
+.sc-tbl-watched  { flex: 0 0 11%;  min-width: 90px; }
+.sc-tbl-size     { flex: 0 0 8%;   min-width: 70px; text-align: right; }
+.sc-tbl-actions  { flex: 0 0 155px; min-width: 140px; justify-content: flex-end; }
 .sc-tbl-header .sort-col { cursor: pointer; user-select: none; }
 .sc-tbl-header .sort-col:hover { color: var(--text); }
 .sc-tbl-header .sort-col.sort-active { color: var(--accent); }
 .th-arrow { visibility: hidden; margin-left: 3px; font-size: .68rem; }
 .sort-active .th-arrow { visibility: visible; }
-/* Info tooltip icon */
 .th-info { font-style: normal; font-size: .8rem; color: var(--muted); margin-left: 2px; cursor: help; }
 .storage-fast { color: var(--green); font-weight: 700; }
 .storage-slow { color: var(--muted); font-weight: 700; }
-/* Column visibility via dynamic <style> */
+.loc-fast     { color: var(--green); font-size: .78rem; font-weight: 700; }
+.loc-slow     { color: var(--muted); font-size: .78rem; }
+.loc-unmapped { color: rgba(255,255,255,.2); font-size: .78rem; }
 
 /* ── Legend ── */
 .legend-box {
@@ -719,6 +524,10 @@ $extra_head = <<<'CSS'
 .legend-tri   { width:0;height:0;border-style:solid;border-width:0 12px 12px 0;flex-shrink:0; }
 
 .sc-empty { grid-column:1/-1;text-align:center;padding:4rem 2rem;color:var(--muted);font-size:.9rem; }
+.sc-no-library {
+  text-align: center; padding: 4rem 2rem; color: var(--muted);
+}
+.sc-no-library strong { color: var(--text); font-size: 1.05rem; display: block; margin-bottom: .5rem; }
 
 /* ── Dashboard action buttons ── */
 .dash-card-actions {
@@ -741,39 +550,57 @@ $extra_head = <<<'CSS'
 .dash-act-btn.act-untrack { color: var(--red); border-color: var(--red); }
 .dash-row-actions { display: flex; gap: 3px; align-items: center; flex-shrink: 0; margin-left: .5rem; }
 .dash-row-actions .dash-act-btn { flex: none; padding: 2px 6px; font-size: .65rem; }
-.sc-tbl-actions { flex: 0 0 155px; min-width: 140px; justify-content: flex-end; }
 .sc-tbl-actions .dash-act-btn { flex: none; padding: 2px 5px; font-size: .65rem; }
 
 @media(max-width:700px) {
   .sc-toolbar { margin: -1rem -1rem 1rem; }
   .sc-grid { grid-template-columns: repeat(auto-fill, minmax(110px,1fr)); gap:4px; }
   .sc-tb-btn { padding: 0 8px; min-width: 40px; font-size:.55rem; }
+  .sc-sync-info { display: none; }
 }
 </style>
 <style id="col-vis-style"></style>
 CSS;
 
-layout_start("Last {$days} Days", 'dashboard', $extra_head);
+layout_start('Library', 'dashboard', $extra_head);
 ?>
 
 <?php if ($errors): ?>
 <div class="notice notice-error" style="margin-bottom:1rem">
-  <?php foreach ($errors as $e): ?><div>⚠ <?= $e ?></div><?php endforeach; ?>
+  <?php foreach ($errors as $e): ?><div>⚠ <?= htmlspecialchars($e) ?></div><?php endforeach; ?>
 </div>
 <?php endif; ?>
 
-<!-- ── Sonarr-style Toolbar ── -->
+<!-- ── Sync form (hidden, submitted by JS sync button) ── -->
+<form id="sync-form" method="post" style="display:none">
+  <input type="hidden" name="action" value="sync_library">
+</form>
+
+<!-- ── Toolbar ── -->
 <div class="sc-toolbar">
 
-  <!-- LEFT: item count -->
   <div class="sc-toolbar-left">
     <div class="sc-item-count">
       <span id="visible-count"><?= $totalItems ?></span>&nbsp;items
     </div>
+    <div class="sc-sync-info">
+      <?php if ($last_synced): ?>
+        Last synced <?= time_ago($last_synced) ?>
+      <?php else: ?>
+        Not yet synced
+      <?php endif; ?>
+    </div>
   </div>
 
-  <!-- RIGHT: Options | sep | View | Sort | Filter -->
   <div class="sc-toolbar-right">
+
+    <!-- Sync -->
+    <button class="sc-tb-btn sc-tb-sync" onclick="triggerSync()" title="Sync library from Sonarr & Radarr">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+      </svg>
+      <span class="lbl">Sync</span>
+    </button>
 
     <!-- Options (column visibility) -->
     <button class="sc-tb-btn" id="btn-options" onclick="openOptions()" title="Options">
@@ -785,7 +612,7 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
 
     <div class="sc-tb-sep"></div>
 
-    <!-- View (eye icon) -->
+    <!-- View -->
     <div class="sc-menu-wrap">
       <button class="sc-tb-btn" onclick="toggleMenu('view-menu')" title="View">
         <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
@@ -794,19 +621,13 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
         <span class="lbl">View</span>
       </button>
       <div class="sc-menu" id="view-menu">
-        <button class="sc-menu-item selected" data-view="poster" onclick="setView('poster',this)">
-          Posters <span class="mi-check">✓</span>
-        </button>
-        <button class="sc-menu-item" data-view="overview" onclick="setView('overview',this)">
-          Overview <span class="mi-check">✓</span>
-        </button>
-        <button class="sc-menu-item" data-view="table" onclick="setView('table',this)">
-          Table <span class="mi-check">✓</span>
-        </button>
+        <button class="sc-menu-item selected" data-view="poster"   onclick="setView('poster',this)">Posters   <span class="mi-check">✓</span></button>
+        <button class="sc-menu-item"          data-view="overview" onclick="setView('overview',this)">Overview <span class="mi-check">✓</span></button>
+        <button class="sc-menu-item"          data-view="table"    onclick="setView('table',this)">Table     <span class="mi-check">✓</span></button>
       </div>
     </div>
 
-    <!-- Sort (bars icon) -->
+    <!-- Sort -->
     <div class="sc-menu-wrap">
       <button class="sc-tb-btn" onclick="toggleMenu('sort-menu')" title="Sort">
         <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
@@ -815,26 +636,22 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
         <span class="lbl">Sort</span>
       </button>
       <div class="sc-menu" id="sort-menu">
-        <button class="sc-menu-item selected" data-sort="plays"   onclick="setSort('plays',this)">
-          Plays
-          <span class="mi-sortdir" id="sd-plays">↓</span>
+        <button class="sc-menu-item selected" data-sort="watched" onclick="setSort('watched',this)">
+          Last Watched <span class="mi-sortdir" id="sd-watched">↓</span>
         </button>
-        <button class="sc-menu-item" data-sort="title"   onclick="setSort('title',this)">
-          Title
-          <span class="mi-sortdir" id="sd-title">↑</span>
+        <button class="sc-menu-item" data-sort="title" onclick="setSort('title',this)">
+          Title <span class="mi-sortdir" id="sd-title">↑</span>
         </button>
-        <button class="sc-menu-item" data-sort="watched" onclick="setSort('watched',this)">
-          Last Watched
-          <span class="mi-sortdir" id="sd-watched">↓</span>
+        <button class="sc-menu-item" data-sort="size" onclick="setSort('size',this)">
+          Size <span class="mi-sortdir" id="sd-size">↓</span>
         </button>
-        <button class="sc-menu-item" data-sort="added"   onclick="setSort('added',this)">
-          Date Added
-          <span class="mi-sortdir" id="sd-added">↓</span>
+        <button class="sc-menu-item" data-sort="movedate" onclick="setSort('movedate',this)">
+          Move Date <span class="mi-sortdir" id="sd-movedate">↑</span>
         </button>
       </div>
     </div>
 
-    <!-- Filter (funnel icon) -->
+    <!-- Filter -->
     <div class="sc-menu-wrap">
       <button class="sc-tb-btn" id="btn-filter" onclick="toggleMenu('filter-menu')" title="Filter">
         <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor">
@@ -843,13 +660,19 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
         <span class="lbl">Filter</span>
         <span class="sc-tb-indicator"></span>
       </button>
-      <div class="sc-menu" id="filter-menu" style="min-width:180px">
-        <label class="sc-filter-row">
-          <input type="checkbox" id="f-shows" checked onchange="applyFilter()"> TV Shows
-        </label>
-        <label class="sc-filter-row">
-          <input type="checkbox" id="f-movies" checked onchange="applyFilter()"> Movies
-        </label>
+      <div class="sc-menu" id="filter-menu" style="min-width:190px">
+        <div class="sc-menu-lbl">Type</div>
+        <label class="sc-filter-row"><input type="checkbox" id="f-shows"   checked onchange="applyFilter()"> TV Shows</label>
+        <label class="sc-filter-row"><input type="checkbox" id="f-movies"  checked onchange="applyFilter()"> Movies</label>
+        <div class="sc-menu-sep"></div>
+        <div class="sc-menu-lbl">Location</div>
+        <label class="sc-filter-row"><input type="checkbox" id="f-fast"     checked onchange="applyFilter()"> Fast</label>
+        <label class="sc-filter-row"><input type="checkbox" id="f-slow"     checked onchange="applyFilter()"> Slow</label>
+        <label class="sc-filter-row"><input type="checkbox" id="f-unmapped" checked onchange="applyFilter()"> Unmapped</label>
+        <div class="sc-menu-sep"></div>
+        <div class="sc-menu-lbl">Tracked</div>
+        <label class="sc-filter-row"><input type="checkbox" id="f-tracked"   checked onchange="applyFilter()"> Tracked</label>
+        <label class="sc-filter-row"><input type="checkbox" id="f-untracked" checked onchange="applyFilter()"> Not Tracked</label>
       </div>
     </div>
 
@@ -866,29 +689,16 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
     <div class="sc-modal-body">
       <div class="sc-modal-section-lbl">Columns</div>
       <div class="sc-modal-col">
-        <label>
-          <input type="checkbox" id="col-storage"  checked onchange="saveCols()"> Current Storage
-        </label>
+        <label><input type="checkbox" id="col-location" checked onchange="saveCols()"> Location</label>
       </div>
       <div class="sc-modal-col">
-        <label>
-          <input type="checkbox" id="col-movedate" checked onchange="saveCols()"> Expected Move Date
-        </label>
+        <label><input type="checkbox" id="col-movedate" checked onchange="saveCols()"> Expected Move Date</label>
       </div>
       <div class="sc-modal-col">
-        <label>
-          <input type="checkbox" id="col-plays"    checked onchange="saveCols()"> Total Plays
-        </label>
+        <label><input type="checkbox" id="col-watched"  checked onchange="saveCols()"> Last Watched</label>
       </div>
       <div class="sc-modal-col">
-        <label>
-          <input type="checkbox" id="col-viewers"  checked onchange="saveCols()"> Total Viewers
-        </label>
-      </div>
-      <div class="sc-modal-col">
-        <label>
-          <input type="checkbox" id="col-date"     checked onchange="saveCols()"> Date
-        </label>
+        <label><input type="checkbox" id="col-size"     checked onchange="saveCols()"> Size</label>
       </div>
     </div>
     <div class="sc-modal-ftr">
@@ -897,66 +707,106 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
   </div>
 </div>
 
+<?php if ($lib_count === 0): ?>
+<!-- ── No library yet ── -->
+<div class="sc-no-library">
+  <strong>Library not synced yet</strong>
+  Click <strong>Sync</strong> in the toolbar to fetch all titles from Sonarr &amp; Radarr.
+  <br><br>
+  <form method="post" style="display:inline">
+    <input type="hidden" name="action" value="sync_library">
+    <button type="submit" class="btn btn-primary">Sync Now</button>
+  </form>
+</div>
+
+<?php else: ?>
+
 <!-- ── POSTER GRID ── -->
 <div id="poster-view" class="sc-grid">
 <?php if ($totalItems === 0): ?>
-  <div class="sc-empty">No media found for the last <?= $days ?> days.</div>
+  <div class="sc-empty">No media found in library.</div>
 <?php endif; ?>
 
-<?php foreach ($tvShows as $showTitle => $info): ?>
+<?php foreach ($tvShows as $row):
+  $action  = row_to_action($row);
+  $tr      = row_to_tracked($row);
+  $loc     = $row['location'];
+  $watched = (int)($row['last_watched_at'] ?? 0);
+  $recently_watched = $watched && (time() - $watched < 30 * 86400);
+?>
 <div class="sc-card"
-  data-title="<?= htmlspecialchars(strtolower($showTitle)) ?>"
+  data-title="<?= htmlspecialchars(strtolower($row['title'])) ?>"
   data-type="show"
-  data-plays="<?= $info['plays'] ?>"
-  data-watched="<?= $info['last_watched'] ?>"
-  data-added="0">
+  data-watched="<?= $watched ?>"
+  data-size="<?= (int)$row['size_on_disk'] ?>"
+  data-location="<?= htmlspecialchars($loc) ?>"
+  data-tracked="<?= $tr ? '1' : '0' ?>"
+  data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
+  data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
 
   <div class="sc-poster">
-    <?php if ($info['rating_key']): ?>
-      <img src="<?= htmlspecialchars($tautulliUrl.'/api/v2?apikey='.$apiKey.'&cmd=pms_image_proxy&rating_key='.urlencode($info['rating_key']).'&width=300&height=450&fallback=poster') ?>"
+    <?php if ($row['poster_url']): ?>
+      <img src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
       <div class="sc-poster-ph ph-show">📺</div>
     <?php else: ?>
       <div class="sc-poster-ph ph-show" style="display:flex">📺
-        <div class="sc-overlay-title"><?= htmlspecialchars($showTitle) ?></div>
+        <div class="sc-overlay-title"><?= htmlspecialchars($row['title']) ?></div>
       </div>
     <?php endif; ?>
-    <div class="sc-tri sc-tri-watched" title="Recently watched"></div>
-    <?= render_dash_action_btns(get_action($media_action_map, $showTitle, $info['tvdb_id'] ?? 0), get_tracked($tracked_map, $showTitle), $showTitle) ?>
+    <?php if ($loc === 'fast'): ?>
+      <div class="sc-tri sc-tri-fast" title="On fast storage"></div>
+    <?php elseif ($recently_watched): ?>
+      <div class="sc-tri sc-tri-watched" title="Recently watched"></div>
+    <?php endif; ?>
+    <?= render_dash_action_btns($action, $tr, $row['title']) ?>
   </div>
   <div class="sc-card-body">
-    <div class="sc-title" title="<?= htmlspecialchars($showTitle) ?>"><?= htmlspecialchars($showTitle) ?></div>
-    <div class="sc-meta">▶ <?= $info['plays'] ?> &nbsp;·&nbsp; <?= time_ago($info['last_watched']) ?></div>
+    <div class="sc-title" title="<?= htmlspecialchars($row['title']) ?>"><?= htmlspecialchars($row['title']) ?></div>
+    <div class="sc-meta"><?= $watched ? time_ago($watched) : 'Never watched' ?> &nbsp;·&nbsp; <?= fmt_bytes((int)$row['size_on_disk']) ?></div>
   </div>
 </div>
 <?php endforeach; ?>
 
-<?php foreach ($movies as $movie): ?>
+<?php foreach ($movies as $row):
+  $action  = row_to_action($row);
+  $tr      = row_to_tracked($row);
+  $loc     = $row['location'];
+  $watched = (int)($row['last_watched_at'] ?? 0);
+  $recently_watched = $watched && (time() - $watched < 30 * 86400);
+?>
 <div class="sc-card"
-  data-title="<?= htmlspecialchars(strtolower($movie['title'])) ?>"
+  data-title="<?= htmlspecialchars(strtolower($row['title'])) ?>"
   data-type="movie"
-  data-plays="0"
-  data-watched="0"
-  data-added="<?= $movie['added_at'] ?>">
+  data-watched="<?= $watched ?>"
+  data-size="<?= (int)$row['size_on_disk'] ?>"
+  data-location="<?= htmlspecialchars($loc) ?>"
+  data-tracked="<?= $tr ? '1' : '0' ?>"
+  data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
+  data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
 
   <div class="sc-poster">
-    <?php if ($movie['thumb']): ?>
-      <img src="<?= htmlspecialchars($tautulliUrl.'/api/v2?apikey='.$apiKey.'&cmd=pms_image_proxy&img='.urlencode($movie['thumb']).'&width=300&height=450') ?>"
+    <?php if ($row['poster_url']): ?>
+      <img src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
       <div class="sc-poster-ph ph-movie">🎬</div>
     <?php else: ?>
       <div class="sc-poster-ph ph-movie" style="display:flex">🎬
-        <div class="sc-overlay-title"><?= htmlspecialchars($movie['title']) ?><?= $movie['year'] ? ' ('.(int)$movie['year'].')' : '' ?></div>
+        <div class="sc-overlay-title"><?= htmlspecialchars($row['title']) ?><?= $row['year'] ? ' ('.(int)$row['year'].')' : '' ?></div>
       </div>
     <?php endif; ?>
-    <div class="sc-tri sc-tri-new" title="Recently added"></div>
-    <?= render_dash_action_btns(get_action($media_action_map, $movie['title'], $movie['tmdb_id'] ?? 0, 'tmdb'), get_tracked($tracked_map, $movie['title']), $movie['title']) ?>
+    <?php if ($loc === 'fast'): ?>
+      <div class="sc-tri sc-tri-fast" title="On fast storage"></div>
+    <?php elseif ($recently_watched): ?>
+      <div class="sc-tri sc-tri-watched" title="Recently watched"></div>
+    <?php endif; ?>
+    <?= render_dash_action_btns($action, $tr, $row['title']) ?>
   </div>
   <div class="sc-card-body">
-    <div class="sc-title" title="<?= htmlspecialchars($movie['title']) ?>">
-      <?= htmlspecialchars($movie['title']) ?><?= $movie['year'] ? ' ('.(int)$movie['year'].')' : '' ?>
+    <div class="sc-title" title="<?= htmlspecialchars($row['title']) ?>">
+      <?= htmlspecialchars($row['title']) ?><?= $row['year'] ? ' ('.(int)$row['year'].')' : '' ?>
     </div>
-    <div class="sc-meta">Added <?= time_ago($movie['added_at']) ?></div>
+    <div class="sc-meta"><?= $watched ? time_ago($watched) : 'Never watched' ?> &nbsp;·&nbsp; <?= fmt_bytes((int)$row['size_on_disk']) ?></div>
   </div>
 </div>
 <?php endforeach; ?>
@@ -965,156 +815,185 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
 <!-- ── OVERVIEW ── -->
 <div id="ov-view">
   <div class="card">
-  <?php foreach ($tvShows as $showTitle => $info): ?>
+  <?php foreach ($tvShows as $row):
+    $action  = row_to_action($row);
+    $tr      = row_to_tracked($row);
+    $loc     = $row['location'];
+    $watched = (int)($row['last_watched_at'] ?? 0);
+  ?>
   <div class="ov-row"
-    data-title="<?= htmlspecialchars(strtolower($showTitle)) ?>"
+    data-title="<?= htmlspecialchars(strtolower($row['title'])) ?>"
     data-type="show"
-    data-plays="<?= $info['plays'] ?>"
-    data-watched="<?= $info['last_watched'] ?>"
-    data-added="0">
-    <?php if ($info['rating_key']): ?>
-      <img class="ov-thumb" src="<?= htmlspecialchars($tautulliUrl.'/api/v2?apikey='.$apiKey.'&cmd=pms_image_proxy&rating_key='.urlencode($info['rating_key']).'&width=90&height=135&fallback=poster') ?>"
+    data-watched="<?= $watched ?>"
+    data-size="<?= (int)$row['size_on_disk'] ?>"
+    data-location="<?= htmlspecialchars($loc) ?>"
+    data-tracked="<?= $tr ? '1' : '0' ?>"
+    data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
+    data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
+    <?php if ($row['poster_url']): ?>
+      <img class="ov-thumb" src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
       <div class="ov-thumb-ph ph-show" style="display:none">📺</div>
     <?php else: ?>
       <div class="ov-thumb-ph ph-show">📺</div>
     <?php endif; ?>
     <div class="ov-info">
-      <div class="ov-title"><?= htmlspecialchars($showTitle) ?></div>
-      <div class="ov-meta">Last watched <?= time_ago($info['last_watched']) ?> &nbsp;·&nbsp; <?= count($info['users']) ?> viewer<?= count($info['users'])!==1?'s':'' ?></div>
+      <div class="ov-title"><?= htmlspecialchars($row['title']) ?></div>
+      <div class="ov-meta">
+        <?= $watched ? 'Watched '.time_ago($watched) : 'Never watched' ?>
+        &nbsp;·&nbsp; <?= fmt_bytes((int)$row['size_on_disk']) ?>
+      </div>
     </div>
     <div class="ov-right">
-      <div style="font-weight:700;color:var(--accent);font-size:.88rem">▶ <?= $info['plays'] ?></div>
-      <div style="font-size:.7rem;color:var(--muted)"><?= $info['plays']===1?'play':'plays' ?></div>
+      <?php if ($loc === 'fast'): ?>
+        <span class="storage-fast" style="font-size:.78rem">Fast</span>
+      <?php elseif ($loc === 'slow'): ?>
+        <span class="storage-slow" style="font-size:.78rem">Slow</span>
+      <?php else: ?>
+        <span style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
+      <?php endif; ?>
     </div>
-    <?= render_dash_action_btns(get_action($media_action_map, $showTitle, $info['tvdb_id'] ?? 0), get_tracked($tracked_map, $showTitle), $showTitle, 'dash-row-actions') ?>
+    <?= render_dash_action_btns($action, $tr, $row['title'], 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
-  <?php foreach ($movies as $movie): ?>
+  <?php foreach ($movies as $row):
+    $action  = row_to_action($row);
+    $tr      = row_to_tracked($row);
+    $loc     = $row['location'];
+    $watched = (int)($row['last_watched_at'] ?? 0);
+  ?>
   <div class="ov-row"
-    data-title="<?= htmlspecialchars(strtolower($movie['title'])) ?>"
+    data-title="<?= htmlspecialchars(strtolower($row['title'])) ?>"
     data-type="movie"
-    data-plays="0"
-    data-watched="0"
-    data-added="<?= $movie['added_at'] ?>">
-    <?php if ($movie['thumb']): ?>
-      <img class="ov-thumb" src="<?= htmlspecialchars($tautulliUrl.'/api/v2?apikey='.$apiKey.'&cmd=pms_image_proxy&img='.urlencode($movie['thumb']).'&width=90&height=135') ?>"
+    data-watched="<?= $watched ?>"
+    data-size="<?= (int)$row['size_on_disk'] ?>"
+    data-location="<?= htmlspecialchars($loc) ?>"
+    data-tracked="<?= $tr ? '1' : '0' ?>"
+    data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
+    data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
+    <?php if ($row['poster_url']): ?>
+      <img class="ov-thumb" src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
       <div class="ov-thumb-ph ph-movie" style="display:none">🎬</div>
     <?php else: ?>
       <div class="ov-thumb-ph ph-movie">🎬</div>
     <?php endif; ?>
     <div class="ov-info">
-      <div class="ov-title"><?= htmlspecialchars($movie['title']) ?><?= $movie['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$movie['year'].')</span>' : '' ?></div>
-      <div class="ov-meta">Added <?= time_ago($movie['added_at']) ?></div>
+      <div class="ov-title"><?= htmlspecialchars($row['title']) ?><?= $row['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$row['year'].')</span>' : '' ?></div>
+      <div class="ov-meta">
+        <?= $watched ? 'Watched '.time_ago($watched) : 'Never watched' ?>
+        &nbsp;·&nbsp; <?= fmt_bytes((int)$row['size_on_disk']) ?>
+      </div>
     </div>
-    <div class="ov-right"><span class="badge badge-green">New</span></div>
-    <?= render_dash_action_btns(get_action($media_action_map, $movie['title'], $movie['tmdb_id'] ?? 0, 'tmdb'), get_tracked($tracked_map, $movie['title']), $movie['title'], 'dash-row-actions') ?>
+    <div class="ov-right">
+      <?php if ($loc === 'fast'): ?>
+        <span class="storage-fast" style="font-size:.78rem">Fast</span>
+      <?php elseif ($loc === 'slow'): ?>
+        <span class="storage-slow" style="font-size:.78rem">Slow</span>
+      <?php else: ?>
+        <span style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
+      <?php endif; ?>
+    </div>
+    <?= render_dash_action_btns($action, $tr, $row['title'], 'dash-row-actions') ?>
   </div>
   <?php endforeach; ?>
-  <?php if ($totalItems===0): ?><div class="empty">No media found for the last <?= $days ?> days.</div><?php endif; ?>
+  <?php if ($totalItems === 0): ?>
+    <div class="empty">No media found in library.</div>
+  <?php endif; ?>
   </div>
 </div><!-- #ov-view -->
 
-<!-- ── TABLE VIEW (Sonarr-style flex rows, no images) ── -->
+<!-- ── TABLE VIEW ── -->
 <div id="tbl-view">
   <?php if ($totalItems === 0): ?>
-    <div class="empty">No media found for the last <?= $days ?> days.</div>
+    <div class="empty">No media found in library.</div>
   <?php else: ?>
   <div class="card sc-tbl" id="tbl-container">
-
-    <!-- Header -->
     <div class="sc-tbl-header">
       <div class="sc-tbl-cell sc-tbl-title sort-col" data-col="title" onclick="setSort('title',null)">
         Title <span class="th-arrow">↑</span>
       </div>
       <div class="sc-tbl-cell sc-tbl-type">Type</div>
-      <div class="sc-tbl-cell sc-tbl-storage col-storage sort-col" data-col="storage" onclick="setSort('storage',null)">
-        Storage <span class="th-arrow">↑</span>
+      <div class="sc-tbl-cell sc-tbl-location col-location sort-col" data-col="location" onclick="setSort('storage',null)">
+        Location <span class="th-arrow">↑</span>
       </div>
       <div class="sc-tbl-cell sc-tbl-movedate col-movedate sort-col" data-col="movedate" onclick="setSort('movedate',null)">
-        Expected Move Date
-        <span class="th-info" title="The date this item is scheduled to be relocated between fast and slow storage. Only shown when a move has been recorded and a future relocation date is set.">ⓘ</span>
+        Move Date
+        <span class="th-info" title="Scheduled relocation date (only shown when a future date is set)">ⓘ</span>
         <span class="th-arrow">↑</span>
       </div>
-      <div class="sc-tbl-cell sc-tbl-plays col-plays sort-col" data-col="plays" onclick="setSort('plays',null)">
-        Plays <span class="th-arrow">↑</span>
+      <div class="sc-tbl-cell sc-tbl-watched col-watched sort-col" data-col="watched" onclick="setSort('watched',null)">
+        Last Watched <span class="th-arrow">↑</span>
       </div>
-      <div class="sc-tbl-cell sc-tbl-viewers col-viewers sort-col" data-col="viewers" onclick="setSort('viewers',null)">
-        Viewers <span class="th-arrow">↑</span>
-      </div>
-      <div class="sc-tbl-cell sc-tbl-date col-date sort-col" data-col="date" onclick="setSort('date',null)">
-        Date <span class="th-arrow">↑</span>
+      <div class="sc-tbl-cell sc-tbl-size col-size sort-col" data-col="size" onclick="setSort('size',null)">
+        Size <span class="th-arrow">↑</span>
       </div>
       <div class="sc-tbl-cell sc-tbl-actions"></div>
     </div>
 
-    <!-- TV Show rows -->
-    <?php foreach ($tvShows as $showTitle => $info):
-      $tr = get_tracked($tracked_map, $showTitle);
-      $movedate  = fmt_movedate($tr);
-      $ts_move   = ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0;
-      $ts_loc    = ($tr && $tr['current_location']==='fast') ? 1 : 0;
-    ?>
-    <div class="sc-tbl-row"
-      data-title="<?= htmlspecialchars(strtolower($showTitle)) ?>"
-      data-type="show"
-      data-plays="<?= $info['plays'] ?>"
-      data-watched="<?= $info['last_watched'] ?>"
-      data-added="0"
-      data-storage="<?= $ts_loc ?>"
-      data-movedate="<?= $ts_move ?>">
-      <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600"><?= htmlspecialchars($showTitle) ?></div>
-      <div class="sc-tbl-cell sc-tbl-type"><span class="badge badge-muted" style="font-size:.68rem">TV</span></div>
-      <div class="sc-tbl-cell sc-tbl-storage col-storage">
-        <?php if ($tr): ?>
-          <span class="<?= $tr['current_location']==='fast' ? 'storage-fast' : 'storage-slow' ?>">
-            <?= $tr['current_location']==='fast' ? 'Fast' : 'Slow' ?>
-          </span>
-        <?php else: ?><span style="color:var(--muted)">—</span><?php endif; ?>
-      </div>
-      <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
-      <div class="sc-tbl-cell sc-tbl-plays col-plays" style="font-weight:700;color:var(--accent)"><?= $info['plays'] ?></div>
-      <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)"><?= count($info['users']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem"><?= time_ago($info['last_watched']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns(get_action($media_action_map, $showTitle, $info['tvdb_id'] ?? 0), $tr, $showTitle, 'dash-row-actions') ?></div>
-    </div>
-    <?php endforeach; ?>
-
-    <!-- Movie rows -->
-    <?php foreach ($movies as $movie):
-      $tr = get_tracked($tracked_map, $movie['title']);
+    <?php foreach ($tvShows as $row):
+      $action   = row_to_action($row);
+      $tr       = row_to_tracked($row);
+      $loc      = $row['location'];
+      $watched  = (int)($row['last_watched_at'] ?? 0);
       $movedate = fmt_movedate($tr);
       $ts_move  = ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0;
-      $ts_loc   = ($tr && $tr['current_location']==='fast') ? 1 : 0;
     ?>
     <div class="sc-tbl-row"
-      data-title="<?= htmlspecialchars(strtolower($movie['title'])) ?>"
-      data-type="movie"
-      data-plays="0"
-      data-watched="0"
-      data-added="<?= $movie['added_at'] ?>"
-      data-storage="<?= $ts_loc ?>"
+      data-title="<?= htmlspecialchars(strtolower($row['title'])) ?>"
+      data-type="show"
+      data-watched="<?= $watched ?>"
+      data-size="<?= (int)$row['size_on_disk'] ?>"
+      data-location="<?= htmlspecialchars($loc) ?>"
+      data-tracked="<?= $tr ? '1' : '0' ?>"
+      data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
       data-movedate="<?= $ts_move ?>">
-      <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600">
-        <?= htmlspecialchars($movie['title']) ?><?= $movie['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$movie['year'].')</span>' : '' ?>
-      </div>
-      <div class="sc-tbl-cell sc-tbl-type"><span class="badge" style="font-size:.68rem;background:rgba(160,90,219,.12);color:#a05adb">Movie</span></div>
-      <div class="sc-tbl-cell sc-tbl-storage col-storage">
-        <?php if ($tr): ?>
-          <span class="<?= $tr['current_location']==='fast' ? 'storage-fast' : 'storage-slow' ?>">
-            <?= $tr['current_location']==='fast' ? 'Fast' : 'Slow' ?>
-          </span>
-        <?php else: ?><span style="color:var(--muted)">—</span><?php endif; ?>
+      <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600"><?= htmlspecialchars($row['title']) ?></div>
+      <div class="sc-tbl-cell sc-tbl-type"><span class="badge badge-muted" style="font-size:.68rem">TV</span></div>
+      <div class="sc-tbl-cell sc-tbl-location col-location">
+        <?php if ($loc === 'fast'): ?><span class="loc-fast">Fast</span>
+        <?php elseif ($loc === 'slow'): ?><span class="loc-slow">Slow</span>
+        <?php else: ?><span class="loc-unmapped">—</span><?php endif; ?>
       </div>
       <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
-      <div class="sc-tbl-cell sc-tbl-plays col-plays" style="color:var(--muted)">—</div>
-      <div class="sc-tbl-cell sc-tbl-viewers col-viewers" style="color:var(--muted)">—</div>
-      <div class="sc-tbl-cell sc-tbl-date col-date" style="color:var(--muted);font-size:.82rem">Added <?= time_ago($movie['added_at']) ?></div>
-      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns(get_action($media_action_map, $movie['title'], $movie['tmdb_id'] ?? 0, 'tmdb'), $tr, $movie['title'], 'dash-row-actions') ?></div>
+      <div class="sc-tbl-cell sc-tbl-watched  col-watched"  style="color:var(--muted);font-size:.82rem"><?= fmt_watched($watched ?: null) ?></div>
+      <div class="sc-tbl-cell sc-tbl-size     col-size"     style="color:var(--muted);font-size:.82rem"><?= fmt_bytes((int)$row['size_on_disk']) ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($action, $tr, $row['title'], 'dash-row-actions') ?></div>
     </div>
     <?php endforeach; ?>
 
+    <?php foreach ($movies as $row):
+      $action   = row_to_action($row);
+      $tr       = row_to_tracked($row);
+      $loc      = $row['location'];
+      $watched  = (int)($row['last_watched_at'] ?? 0);
+      $movedate = fmt_movedate($tr);
+      $ts_move  = ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0;
+    ?>
+    <div class="sc-tbl-row"
+      data-title="<?= htmlspecialchars(strtolower($row['title'])) ?>"
+      data-type="movie"
+      data-watched="<?= $watched ?>"
+      data-size="<?= (int)$row['size_on_disk'] ?>"
+      data-location="<?= htmlspecialchars($loc) ?>"
+      data-tracked="<?= $tr ? '1' : '0' ?>"
+      data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
+      data-movedate="<?= $ts_move ?>">
+      <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600">
+        <?= htmlspecialchars($row['title']) ?><?= $row['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$row['year'].')</span>' : '' ?>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-type"><span class="badge" style="font-size:.68rem;background:rgba(160,90,219,.12);color:#a05adb">Movie</span></div>
+      <div class="sc-tbl-cell sc-tbl-location col-location">
+        <?php if ($loc === 'fast'): ?><span class="loc-fast">Fast</span>
+        <?php elseif ($loc === 'slow'): ?><span class="loc-slow">Slow</span>
+        <?php else: ?><span class="loc-unmapped">—</span><?php endif; ?>
+      </div>
+      <div class="sc-tbl-cell sc-tbl-movedate col-movedate" style="color:var(--muted);font-size:.82rem"><?= htmlspecialchars($movedate) ?></div>
+      <div class="sc-tbl-cell sc-tbl-watched  col-watched"  style="color:var(--muted);font-size:.82rem"><?= fmt_watched($watched ?: null) ?></div>
+      <div class="sc-tbl-cell sc-tbl-size     col-size"     style="color:var(--muted);font-size:.82rem"><?= fmt_bytes((int)$row['size_on_disk']) ?></div>
+      <div class="sc-tbl-cell sc-tbl-actions"><?= render_dash_action_btns($action, $tr, $row['title'], 'dash-row-actions') ?></div>
+    </div>
+    <?php endforeach; ?>
   </div>
   <?php endif; ?>
 </div><!-- #tbl-view -->
@@ -1125,30 +1004,28 @@ layout_start("Last {$days} Days", 'dashboard', $extra_head);
   <div class="legend-items">
     <div class="legend-item">
       <div class="legend-tri" style="border-color:transparent var(--accent) transparent transparent"></div>
-      <span>Orange — recently watched TV show</span>
+      <span>Orange — on fast storage</span>
     </div>
     <div class="legend-item">
       <div class="legend-tri" style="border-color:transparent var(--green) transparent transparent"></div>
-      <span>Green — recently added movie</span>
+      <span>Green — watched in last 30 days</span>
     </div>
     <div class="legend-item">
-      <span class="storage-fast">→ Fast</span>
+      <span class="loc-fast">Fast</span>
       <span>Currently on fast storage (SSD)</span>
     </div>
     <div class="legend-item">
-      <span class="storage-slow">← Slow</span>
+      <span class="loc-slow">Slow</span>
       <span>Currently on slow storage (HDD/RAID)</span>
     </div>
     <div class="legend-item">
-      <span style="font-size:1rem">📺</span>
-      <span>TV show — watched in last <strong style="color:var(--text)"><?= $days ?></strong> days</span>
-    </div>
-    <div class="legend-item">
-      <span style="font-size:1rem">🎬</span>
-      <span>Movie — added in last <strong style="color:var(--text)"><?= $days ?></strong> days</span>
+      <span style="font-size:.78rem;color:rgba(255,255,255,.2)">—</span>
+      <span>Not on a configured path mapping</span>
     </div>
   </div>
 </div>
+
+<?php endif; // lib_count > 0 ?>
 
 <script>
 function submitDashAction(btn) {
@@ -1162,17 +1039,20 @@ function submitDashAction(btn) {
   document.getElementById('daf-location').value   = d.location;
   document.getElementById('daf-media-type').value = d.mediaType;
   document.getElementById('daf-track-id').value   = d.trackId || '';
-  document.getElementById('daf-size').value        = d.sizeOnDisk || '0';
+  document.getElementById('daf-size').value       = d.sizeOnDisk || '0';
   document.getElementById('dash-action-form').submit();
 }
 
+function triggerSync() {
+  document.getElementById('sync-form').submit();
+}
+
 (function() {
-  // ── State ──
-  var currentView   = 'poster';
-  var currentSort   = 'plays';
-  var sortDirs      = { plays:false, title:true, watched:false, added:false, storage:true, movedate:true, viewers:false };
-  var cols          = { storage:true, movedate:true, plays:true, viewers:true, date:true };
-  var filters       = { shows:true, movies:true };
+  var currentView = 'poster';
+  var currentSort = 'watched';
+  var sortDirs    = { watched:false, title:true, size:false, movedate:true, storage:true };
+  var cols        = { location:true, movedate:true, watched:true, size:true };
+  var filters     = { shows:true, movies:true, fast:true, slow:true, unmapped:true, tracked:true, untracked:true };
 
   var posterView = document.getElementById('poster-view');
   var ovView     = document.getElementById('ov-view');
@@ -1180,173 +1060,144 @@ function submitDashAction(btn) {
   var countEl    = document.getElementById('visible-count');
   var colStyle   = document.getElementById('col-vis-style');
 
-  // ── Persist / restore ──
   function save() {
     try {
-      localStorage.setItem('mv_view',    currentView);
-      localStorage.setItem('mv_sort',    currentSort);
-      localStorage.setItem('mv_sdirs',   JSON.stringify(sortDirs));
-      localStorage.setItem('mv_cols',    JSON.stringify(cols));
-      localStorage.setItem('mv_filters', JSON.stringify(filters));
+      localStorage.setItem('mv2_view',    currentView);
+      localStorage.setItem('mv2_sort',    currentSort);
+      localStorage.setItem('mv2_sdirs',   JSON.stringify(sortDirs));
+      localStorage.setItem('mv2_cols',    JSON.stringify(cols));
+      localStorage.setItem('mv2_filters', JSON.stringify(filters));
     } catch(e) {}
   }
   function restore() {
     try {
-      var v = localStorage.getItem('mv_view');    if(v) currentView = v;
-      var s = localStorage.getItem('mv_sort');    if(s) currentSort = s;
-      var sd= localStorage.getItem('mv_sdirs');   if(sd) Object.assign(sortDirs, JSON.parse(sd));
-      var c = localStorage.getItem('mv_cols');    if(c) Object.assign(cols, JSON.parse(c));
-      var f = localStorage.getItem('mv_filters'); if(f) Object.assign(filters, JSON.parse(f));
+      var v  = localStorage.getItem('mv2_view');    if(v)  currentView = v;
+      var s  = localStorage.getItem('mv2_sort');    if(s)  currentSort = s;
+      var sd = localStorage.getItem('mv2_sdirs');   if(sd) Object.assign(sortDirs, JSON.parse(sd));
+      var c  = localStorage.getItem('mv2_cols');    if(c)  Object.assign(cols, JSON.parse(c));
+      var f  = localStorage.getItem('mv2_filters'); if(f)  Object.assign(filters, JSON.parse(f));
     } catch(e) {}
   }
 
-  // ── Column CSS ──
   function applyColCSS() {
     var css = '';
-    if (!cols.storage)  css += '.col-storage{display:none}';
+    if (!cols.location) css += '.col-location{display:none}';
     if (!cols.movedate) css += '.col-movedate{display:none}';
-    if (!cols.plays)    css += '.col-plays{display:none}';
-    if (!cols.viewers)  css += '.col-viewers{display:none}';
-    if (!cols.date)     css += '.col-date{display:none}';
+    if (!cols.watched)  css += '.col-watched{display:none}';
+    if (!cols.size)     css += '.col-size{display:none}';
     colStyle.textContent = css;
-    // Sync checkboxes
-    document.getElementById('col-storage').checked  = cols.storage;
+    document.getElementById('col-location').checked = cols.location;
     document.getElementById('col-movedate').checked = cols.movedate;
-    document.getElementById('col-plays').checked    = cols.plays;
-    document.getElementById('col-viewers').checked  = cols.viewers;
-    document.getElementById('col-date').checked     = cols.date;
+    document.getElementById('col-watched').checked  = cols.watched;
+    document.getElementById('col-size').checked     = cols.size;
   }
 
   window.saveCols = function() {
-    cols.storage  = document.getElementById('col-storage').checked;
+    cols.location = document.getElementById('col-location').checked;
     cols.movedate = document.getElementById('col-movedate').checked;
-    cols.plays    = document.getElementById('col-plays').checked;
-    cols.viewers  = document.getElementById('col-viewers').checked;
-    cols.date     = document.getElementById('col-date').checked;
-    applyColCSS();
-    save();
+    cols.watched  = document.getElementById('col-watched').checked;
+    cols.size     = document.getElementById('col-size').checked;
+    applyColCSS(); save();
   };
 
-  // ── View switching ──
   window.setView = function(v, btn) {
     currentView = v;
     posterView.style.display = v==='poster'   ? '' : 'none';
     ovView.style.display     = v==='overview' ? 'block' : 'none';
     tblView.style.display    = v==='table'    ? 'block' : 'none';
-    // Update view menu items
     document.querySelectorAll('#view-menu .sc-menu-item').forEach(function(i) {
       i.classList.toggle('selected', i.dataset.view === v);
     });
-    // Update options icon based on view
     var icons = {
       poster:   '<path d="M3 3h7v9H3zm11 0h7v9h-7zm-11 11h7v7H3zm11 0h7v7h-7z"/>',
       overview: '<path d="M3 5h2V3H3v2zm0 4h2V7H3v2zm0 4h2v-2H3v2zm4-8h14V3H7v2zm0 4h14V7H7v2zm0 4h14v-2H7v2z"/>',
       table:    '<path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-9 11H5v-2h6v2zm0-4H5V7h6v2zm8 4h-6v-2h6v2zm0-4h-6V7h6v2z"/>'
     };
     document.getElementById('options-icon').innerHTML = icons[v] || icons.table;
-    closeAllMenus();
-    save();
+    closeAllMenus(); save();
   };
 
-  // ── Sort ──
   window.setSort = function(key, btn) {
-    if (currentSort === key) {
-      sortDirs[key] = !sortDirs[key];
-    } else {
-      currentSort = key;
-    }
-    // Update sort menu
+    if (currentSort === key) { sortDirs[key] = !sortDirs[key]; }
+    else { currentSort = key; }
     document.querySelectorAll('#sort-menu .sc-menu-item').forEach(function(i) {
-      var isActive = i.dataset.sort === key;
-      i.classList.toggle('selected', isActive);
+      i.classList.toggle('selected', i.dataset.sort === key);
     });
-    // Update sort direction icons in menu
     Object.keys(sortDirs).forEach(function(k) {
       var el = document.getElementById('sd-'+k);
       if (el) el.textContent = sortDirs[k] ? '↑' : '↓';
     });
-    // Update table header indicators
     document.querySelectorAll('#tbl-view .sort-col').forEach(function(th) {
       var isActive = th.dataset.col === key;
       th.classList.toggle('sort-active', isActive);
       var arrow = th.querySelector('.th-arrow');
       if (arrow) arrow.textContent = sortDirs[key] ? '↑' : '↓';
     });
-    closeAllMenus();
-    applyAll();
-    save();
+    closeAllMenus(); applyAll(); save();
   };
 
-  // ── Filter ──
   window.applyFilter = function() {
-    filters.shows  = document.getElementById('f-shows').checked;
-    filters.movies = document.getElementById('f-movies').checked;
-    // Show indicator dot when not everything is selected
-    var allOn = filters.shows && filters.movies;
+    filters.shows    = document.getElementById('f-shows').checked;
+    filters.movies   = document.getElementById('f-movies').checked;
+    filters.fast     = document.getElementById('f-fast').checked;
+    filters.slow     = document.getElementById('f-slow').checked;
+    filters.unmapped = document.getElementById('f-unmapped').checked;
+    filters.tracked  = document.getElementById('f-tracked').checked;
+    filters.untracked= document.getElementById('f-untracked').checked;
+    var allOn = filters.shows && filters.movies && filters.fast && filters.slow
+             && filters.unmapped && filters.tracked && filters.untracked;
     document.getElementById('btn-filter').classList.toggle('has-filter', !allOn);
-    applyAll();
-    save();
+    applyAll(); save();
   };
 
-  // ── Comparator ──
   function cmp(a, b) {
     var asc = sortDirs[currentSort] === true;
-    var av, bv;
     if (currentSort === 'title') {
-      av = a.dataset.title||''; bv = b.dataset.title||'';
+      var av = a.dataset.title||'', bv = b.dataset.title||'';
       return asc ? av.localeCompare(bv) : bv.localeCompare(av);
     }
-    if (currentSort === 'storage') {
-      av = parseInt(a.dataset.storage||'0'); bv = parseInt(b.dataset.storage||'0');
-    } else if (currentSort === 'movedate') {
-      av = parseInt(a.dataset.movedate||'0'); bv = parseInt(b.dataset.movedate||'0');
-    } else if (currentSort === 'plays') {
-      av = parseInt(a.dataset.plays||'0'); bv = parseInt(b.dataset.plays||'0');
-    } else if (currentSort === 'viewers') {
-      av = parseInt(a.dataset.viewers||'0'); bv = parseInt(b.dataset.viewers||'0');
-    } else if (currentSort === 'watched') {
-      av = parseInt(a.dataset.watched||'0'); bv = parseInt(b.dataset.watched||'0');
-    } else if (currentSort === 'added' || currentSort === 'date') {
-      av = parseInt(a.dataset.added||'0')  || parseInt(a.dataset.watched||'0');
-      bv = parseInt(b.dataset.added||'0')  || parseInt(b.dataset.watched||'0');
-    } else {
-      return 0;
-    }
+    var av, bv;
+    if      (currentSort === 'watched')  { av = parseInt(a.dataset.watched||'0');   bv = parseInt(b.dataset.watched||'0'); }
+    else if (currentSort === 'size')     { av = parseInt(a.dataset.size||'0');      bv = parseInt(b.dataset.size||'0'); }
+    else if (currentSort === 'storage')  { av = parseInt(a.dataset.storage||'0');   bv = parseInt(b.dataset.storage||'0'); }
+    else if (currentSort === 'movedate') { av = parseInt(a.dataset.movedate||'0');  bv = parseInt(b.dataset.movedate||'0'); }
+    else return 0;
     return asc ? av - bv : bv - av;
   }
 
   function isVisible(el) {
-    var type = el.dataset.type || '';
-    if (!filters.shows  && type === 'show')  return false;
-    if (!filters.movies && type === 'movie') return false;
+    var type    = el.dataset.type    || '';
+    var loc     = el.dataset.location|| '';
+    var tracked = el.dataset.tracked || '0';
+    if (!filters.shows    && type === 'show')      return false;
+    if (!filters.movies   && type === 'movie')     return false;
+    if (!filters.fast     && loc  === 'fast')      return false;
+    if (!filters.slow     && loc  === 'slow')      return false;
+    if (!filters.unmapped && loc  === 'unmapped')  return false;
+    if (!filters.tracked  && tracked === '1')      return false;
+    if (!filters.untracked&& tracked === '0')      return false;
     return true;
   }
 
-  // ── Apply all ──
   function applyAll() {
     var cards   = [...posterView.querySelectorAll('.sc-card')];
     var ovRows  = [...ovView.querySelectorAll('.ov-row')];
     var tblRows = [...document.querySelectorAll('#tbl-view .sc-tbl-row')];
 
-    // Sort & reorder poster cards
-    cards.sort(cmp).forEach(function(c) { posterView.appendChild(c); });
-    // Sort & reorder overview rows
+    cards.sort(cmp).forEach(function(c)   { posterView.appendChild(c); });
     var ovCard = ovView.querySelector('.card');
     if (ovCard) ovRows.sort(cmp).forEach(function(r) { ovCard.appendChild(r); });
-    // Sort & reorder flex table rows (header stays first, rows appended after)
     var tblCont = document.getElementById('tbl-container');
     if (tblCont) tblRows.sort(cmp).forEach(function(r) { tblCont.appendChild(r); });
 
-    // Show/hide
     var n = 0;
-    cards.forEach(function(c)   { var v=isVisible(c); c.style.display=v?'':  'none'; if(v)n++; });
+    cards.forEach(function(c)   { var v=isVisible(c); c.style.display=v?'':'none'; if(v)n++; });
     ovRows.forEach(function(r)  { r.style.display=isVisible(r)?'':'none'; });
     tblRows.forEach(function(r) { r.style.display=isVisible(r)?'flex':'none'; });
 
     if (countEl) countEl.textContent = n;
   }
 
-  // ── Menus ──
   window.toggleMenu = function(id) {
     var m = document.getElementById(id);
     var wasOpen = m.classList.contains('open');
@@ -1360,23 +1211,24 @@ function submitDashAction(btn) {
     if (!e.target.closest('.sc-menu-wrap') && !e.target.closest('.sc-menu')) closeAllMenus();
   });
 
-  // ── Options modal ──
   window.openOptions  = function() { document.getElementById('options-modal').classList.add('open'); };
   window.closeOptions = function() { document.getElementById('options-modal').classList.remove('open'); };
 
   // ── Init ──
   restore();
 
-  // Apply restored filter checkboxes
-  document.getElementById('f-shows').checked  = filters.shows;
-  document.getElementById('f-movies').checked = filters.movies;
-  var allOn = filters.shows && filters.movies;
+  // Sync filter checkboxes
+  var fKeys = ['shows','movies','fast','slow','unmapped','tracked','untracked'];
+  fKeys.forEach(function(k) {
+    var el = document.getElementById('f-'+k);
+    if (el) el.checked = filters[k];
+  });
+  var allOn = fKeys.every(function(k) { return filters[k]; });
   document.getElementById('btn-filter').classList.toggle('has-filter', !allOn);
 
   applyColCSS();
   setView(currentView, null);
 
-  // Sync sort menu selection
   document.querySelectorAll('#sort-menu .sc-menu-item').forEach(function(i) {
     i.classList.toggle('selected', i.dataset.sort === currentSort);
   });
@@ -1384,10 +1236,8 @@ function submitDashAction(btn) {
     var el = document.getElementById('sd-'+k);
     if (el) el.textContent = sortDirs[k] ? '↑' : '↓';
   });
-  // Sync table headers
   document.querySelectorAll('#tbl-view .sort-col').forEach(function(th) {
-    var isActive = th.dataset.col === currentSort;
-    th.classList.toggle('sort-active', isActive);
+    th.classList.toggle('sort-active', th.dataset.col === currentSort);
     var arrow = th.querySelector('.th-arrow');
     if (arrow) arrow.textContent = sortDirs[currentSort] ? '↑' : '↓';
   });
@@ -1396,7 +1246,7 @@ function submitDashAction(btn) {
 })();
 </script>
 
-<!-- Shared dashboard action form (submitted by JS) -->
+<!-- Shared dashboard action form -->
 <form id="dash-action-form" method="post" style="display:none">
   <input type="hidden" name="action"           id="daf-action">
   <input type="hidden" name="external_id"      id="daf-ext-id">
