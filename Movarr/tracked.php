@@ -50,6 +50,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
             }
         }
         header('Location: tracked.php?msg='.urlencode('Entry not found.').'&mtype=error'); exit;
+    } elseif (in_array($action, ['bulk_move_to_fast','bulk_move_to_slow','bulk_pin','bulk_unpin','bulk_delete'])) {
+        $ids   = array_filter(array_map('intval', $_POST['ids'] ?? []));
+        $moved = 0;
+        foreach ($ids as $id) {
+            if ($action === 'bulk_delete') {
+                db_delete_tracked($db, $id); $moved++;
+            } elseif ($action === 'bulk_pin') {
+                db_pin_tracked($db, $id); $moved++;
+            } elseif ($action === 'bulk_unpin') {
+                $db->prepare("UPDATE tracked_media SET relocate_after=?, source='auto', updated_at=? WHERE id=?")
+                   ->execute([time(), time(), $id]);
+                $moved++;
+            } elseif ($action === 'bulk_move_to_fast' || $action === 'bulk_move_to_slow') {
+                $stmt = $db->prepare("SELECT * FROM tracked_media WHERE id=?");
+                $stmt->execute([$id]);
+                $entry = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($entry) {
+                    $direction = ($action === 'bulk_move_to_fast') ? 'to_fast' : 'to_slow';
+                    db_queue_move($db, (int)$entry['external_id'], $entry['service'],
+                                  $entry['mapping_id'], $direction,
+                                  'bulk move from tracked page', $entry['title']);
+                    $moved++;
+                }
+            }
+        }
+        if (($action === 'bulk_move_to_fast' || $action === 'bulk_move_to_slow') && $moved > 0) {
+            @file_put_contents(config_base() . '/.manual_trigger',
+                date('Y-m-d H:i:s') . ' bulk manual trigger from tracked page' . PHP_EOL);
+        }
+        $labels = [
+            'bulk_move_to_fast' => "$moved item(s) queued \u{2192} fast storage.",
+            'bulk_move_to_slow' => "$moved item(s) queued \u{2190} slow storage.",
+            'bulk_pin'          => "$moved item(s) pinned.",
+            'bulk_unpin'        => "$moved item(s) unpinned.",
+            'bulk_delete'       => "$moved item(s) removed.",
+        ];
+        $label = $labels[$action] ?? "$moved item(s) updated.";
+        header('Location: tracked.php?msg='.urlencode($label).'&mtype=success'); exit;
     }
 }
 
@@ -209,6 +247,8 @@ $extra_head = <<<'CSS'
   flex-shrink: 0;
 }
 /* Column widths — flex-grow fills available space; actions always fixed */
+.sc-tbl-check   { flex: 0 0 28px; justify-content: center; }
+.sc-tbl-check input[type=checkbox] { cursor: pointer; accent-color: var(--accent); }
 .sc-tbl-status  { flex: 0 0 24px; }
 .sc-tbl-title   { flex: 3 1 140px; min-width: 140px; }
 .sc-tbl-type    { flex: 0 0 58px; }
@@ -349,6 +389,21 @@ layout_start('Tracked Media', 'tracked', $extra_head);
   </div>
 </div>
 
+<!-- ── Bulk action bar ── -->
+<div id="bulk-bar" style="display:none;margin-bottom:.75rem;padding:.45rem .75rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);align-items:center;gap:.5rem;flex-wrap:wrap">
+  <span style="font-size:.8rem;color:var(--muted)"><span id="bulk-count">0</span> selected</span>
+  <div style="flex:1"></div>
+  <button class="btn-move to-fast" onclick="bulkAction('bulk_move_to_fast')">→ Fast</button>
+  <button class="btn-move to-slow" onclick="bulkAction('bulk_move_to_slow')">← Slow</button>
+  <button class="btn-move" onclick="bulkAction('bulk_pin')">📌 Pin</button>
+  <button class="btn-move" onclick="bulkAction('bulk_unpin')">📍 Unpin</button>
+  <button class="btn btn-danger" style="padding:.2rem .5rem;font-size:.7rem" onclick="bulkAction('bulk_delete')">✕ Delete</button>
+  <button class="btn" style="padding:.2rem .5rem;font-size:.7rem" onclick="clearBulkSelection()">Clear</button>
+</div>
+<form id="bulk-form" method="POST" action="tracked.php" style="display:none">
+  <input type="hidden" name="action" id="bulk-action-val">
+</form>
+
 <!-- ── TABLE (Sonarr flex rows) ── -->
 <?php if (empty($tracked)): ?>
   <div style="text-align:center;padding:4rem 2rem;color:var(--muted);font-size:.9rem">
@@ -359,6 +414,9 @@ layout_start('Tracked Media', 'tracked', $extra_head);
 
   <!-- Header row -->
   <div class="sc-tbl-header">
+    <div class="sc-tbl-cell sc-tbl-check">
+      <input type="checkbox" id="check-all" title="Select all" onchange="toggleAllChecks(this.checked)">
+    </div>
     <div class="sc-tbl-cell sc-tbl-status"></div>
     <div class="sc-tbl-cell sc-tbl-title sort-col" data-sort="title" onclick="doSort('title')">
       Title <span class="th-arrow">↑</span>
@@ -413,6 +471,9 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     data-pinned="<?= $is_pinned ? '1' : '0' ?>"
     data-expired="<?= $is_expired ? '1' : '0' ?>">
 
+    <div class="sc-tbl-cell sc-tbl-check">
+      <input type="checkbox" class="row-check" value="<?= $row['id'] ?>" onchange="updateBulkBar()">
+    </div>
     <div class="sc-tbl-cell sc-tbl-status">
       <span class="dot <?= $on_fast ? 'dot-green' : 'dot-muted' ?>"></span>
     </div>
@@ -664,6 +725,63 @@ layout_start('Tracked Media', 'tracked', $extra_head);
       _searchTimer = setTimeout(applyVisibility, 180);
     });
   }
+
+  // ── Bulk selection ──
+  window.toggleAllChecks = function(checked) {
+    document.querySelectorAll('#tracked-table .row-check').forEach(function(cb) {
+      var row = cb.closest('.sc-tbl-row');
+      if (!row || row.style.display === 'none') return;
+      cb.checked = checked;
+    });
+    updateBulkBar();
+  };
+
+  window.updateBulkBar = function() {
+    var checked = [...document.querySelectorAll('#tracked-table .row-check:checked')];
+    var bar     = document.getElementById('bulk-bar');
+    var countEl = document.getElementById('bulk-count');
+    var allCb   = document.getElementById('check-all');
+    var visible = [...document.querySelectorAll('#tracked-table .row-check')].filter(function(cb) {
+      var row = cb.closest('.sc-tbl-row');
+      return row && row.style.display !== 'none';
+    });
+    if (countEl) countEl.textContent = checked.length;
+    if (bar)     bar.style.display   = checked.length > 0 ? 'flex' : 'none';
+    if (allCb) {
+      allCb.indeterminate = checked.length > 0 && checked.length < visible.length;
+      allCb.checked       = visible.length > 0 && checked.length === visible.length;
+    }
+  };
+
+  window.clearBulkSelection = function() {
+    document.querySelectorAll('#tracked-table .row-check').forEach(function(cb) { cb.checked = false; });
+    var allCb = document.getElementById('check-all');
+    if (allCb) { allCb.checked = false; allCb.indeterminate = false; }
+    updateBulkBar();
+  };
+
+  window.bulkAction = function(action) {
+    var checked = [...document.querySelectorAll('#tracked-table .row-check:checked')];
+    if (!checked.length) return;
+    var label = {
+      bulk_move_to_fast: 'Move ' + checked.length + ' item(s) to fast storage?',
+      bulk_move_to_slow: 'Move ' + checked.length + ' item(s) to slow storage?',
+      bulk_pin:          'Pin ' + checked.length + ' item(s)?',
+      bulk_unpin:        'Unpin ' + checked.length + ' item(s)?',
+      bulk_delete:       'Remove ' + checked.length + ' item(s) from tracking?',
+    }[action] || 'Apply to ' + checked.length + ' item(s)?';
+    if (!confirm(label)) return;
+    var form = document.getElementById('bulk-form');
+    document.getElementById('bulk-action-val').value = action;
+    // Remove any previous id inputs
+    form.querySelectorAll('input[name="ids[]"]').forEach(function(i) { i.remove(); });
+    checked.forEach(function(cb) {
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'ids[]'; inp.value = cb.value;
+      form.appendChild(inp);
+    });
+    form.submit();
+  };
 
   // Init
   document.querySelectorAll('#sort-menu .sc-menu-item').forEach(function(i) {

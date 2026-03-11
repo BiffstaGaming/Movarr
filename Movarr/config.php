@@ -22,13 +22,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $ids = $_POST['mapping_id'] ?? [];
         foreach ($ids as $i => $id) {
             $mappings[] = [
-                'id'               => $id ?: uniqid('map_'),
-                'name'             => trim($_POST['mapping_name'][$i]             ?? ''),
-                'service'          => $_POST['mapping_service'][$i]              ?? 'sonarr',
-                'slow_path_mover'  => trim($_POST['mapping_slow_path_mover'][$i] ?? ''),
-                'fast_path_mover'  => trim($_POST['mapping_fast_path_mover'][$i] ?? ''),
-                'slow_path_sonarr' => trim($_POST['mapping_slow_path_sonarr'][$i]?? ''),
-                'fast_path_sonarr' => trim($_POST['mapping_fast_path_sonarr'][$i]?? ''),
+                'id'                => $id ?: uniqid('map_'),
+                'name'              => trim($_POST['mapping_name'][$i]              ?? ''),
+                'service'           => $_POST['mapping_service'][$i]               ?? 'sonarr',
+                'slow_path_mover'   => trim($_POST['mapping_slow_path_mover'][$i]  ?? ''),
+                'fast_path_mover'   => trim($_POST['mapping_fast_path_mover'][$i]  ?? ''),
+                'slow_path_sonarr'  => trim($_POST['mapping_slow_path_sonarr'][$i] ?? ''),
+                'fast_path_sonarr'  => trim($_POST['mapping_fast_path_sonarr'][$i] ?? ''),
+                'fast_min_free_pct' => max(0, (float)($_POST['mapping_fast_min_free_pct'][$i] ?? 0)),
             ];
         }
 
@@ -38,22 +39,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'api_key' => trim($_POST['tautulli_api_key'] ?? ''),
             ],
             'sonarr' => [
-                'url'     => trim($_POST['sonarr_url'] ?? ''),
-                'api_key' => trim($_POST['sonarr_api_key'] ?? ''),
+                'url'        => trim($_POST['sonarr_url'] ?? ''),
+                'api_key'    => trim($_POST['sonarr_api_key'] ?? ''),
+                'assign_tag' => isset($_POST['sonarr_assign_tag']),
+                'tag_name'   => trim($_POST['sonarr_tag_name'] ?? ''),
             ],
             'radarr' => [
-                'url'     => trim($_POST['radarr_url'] ?? ''),
-                'api_key' => trim($_POST['radarr_api_key'] ?? ''),
+                'url'        => trim($_POST['radarr_url'] ?? ''),
+                'api_key'    => trim($_POST['radarr_api_key'] ?? ''),
+                'assign_tag' => isset($_POST['radarr_assign_tag']),
+                'tag_name'   => trim($_POST['radarr_tag_name'] ?? ''),
             ],
             'plex' => [
                 'url'   => trim($_POST['plex_url'] ?? ''),
                 'token' => trim($_POST['plex_token'] ?? ''),
             ],
-            'watched_days'  => max(1, (int)($_POST['watched_days'] ?? 30)),
-            'dry_run'       => isset($_POST['dry_run']),
-            'list_only'     => isset($_POST['list_only']),
-            'cron_schedule' => trim($_POST['cron_schedule'] ?? '0 3 * * *'),
-            'path_mappings' => $mappings,
+            'watched_days'    => max(1, (int)($_POST['watched_days'] ?? 30)),
+            'min_watch_count' => max(1, (int)($_POST['min_watch_count'] ?? 1)),
+            'dry_run'         => isset($_POST['dry_run']),
+            'list_only'       => isset($_POST['list_only']),
+            'cron_schedule'   => trim($_POST['cron_schedule'] ?? '0 3 * * *'),
+            'path_mappings'   => $mappings,
         ];
 
         if (save_settings($settings)) {
@@ -123,6 +129,17 @@ layout_start('Settings', 'config');
         </button>
       </div>
     </div>
+    <div class="field-row">
+      <label>Assign Tag on Fast Move</label>
+      <div>
+        <div class="toggle-wrap" style="margin-bottom:.4rem">
+          <input type="checkbox" id="sonarr_assign_tag" name="sonarr_assign_tag" <?= !empty($s['sonarr']['assign_tag']) ? 'checked' : '' ?>>
+          <label for="sonarr_assign_tag">Apply a tag to series after moving to fast storage</label>
+        </div>
+        <input type="text" name="sonarr_tag_name" value="<?= htmlspecialchars($s['sonarr']['tag_name'] ?? '') ?>" placeholder="e.g. fast-storage" style="width:220px">
+        <div class="field-hint">Tag will be created in Sonarr if it doesn't already exist.</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -144,6 +161,17 @@ layout_start('Settings', 'config');
         <button type="button" class="btn-eye" onclick="toggleKey('radarr_api_key', this)" title="Show/hide">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
+      </div>
+    </div>
+    <div class="field-row">
+      <label>Assign Tag on Fast Move</label>
+      <div>
+        <div class="toggle-wrap" style="margin-bottom:.4rem">
+          <input type="checkbox" id="radarr_assign_tag" name="radarr_assign_tag" <?= !empty($s['radarr']['assign_tag']) ? 'checked' : '' ?>>
+          <label for="radarr_assign_tag">Apply a tag to movies after moving to fast storage</label>
+        </div>
+        <input type="text" name="radarr_tag_name" value="<?= htmlspecialchars($s['radarr']['tag_name'] ?? '') ?>" placeholder="e.g. fast-storage" style="width:220px">
+        <div class="field-hint">Tag will be created in Radarr if it doesn't already exist.</div>
       </div>
     </div>
   </div>
@@ -185,6 +213,13 @@ layout_start('Settings', 'config');
       <div>
         <input type="number" name="watched_days" value="<?= (int)$s['watched_days'] ?>" min="1" max="365" style="width:100px">
         <div class="field-hint">Shows watched within this many days are considered active.</div>
+      </div>
+    </div>
+    <div class="field-row">
+      <label>Min Episodes in Watched Days</label>
+      <div>
+        <input type="number" name="min_watch_count" value="<?= (int)($s['min_watch_count'] ?? 1) ?>" min="1" max="999" style="width:100px">
+        <div class="field-hint">Minimum number of episodes (or movie plays) within the watched window before a title is considered active. Default: 1.</div>
       </div>
     </div>
     <div class="field-row">
@@ -255,6 +290,7 @@ layout_start('Settings', 'config');
     'fast_path_mover' => '',
     'slow_path_sonarr' => '',
     'fast_path_sonarr' => '',
+    'fast_min_free_pct' => 0,
   ];
   ob_start();
   include __DIR__ . '/includes/mapping_row.php';

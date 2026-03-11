@@ -19,7 +19,11 @@ function log_file(): string            { return config_base() . '/mover.log'; }
 function queue_file(): string          { return config_base() . '/queue.json'; }
 function db_file(): string             { return config_base() . '/movarr.db'; }
 function health_file(): string         { return config_base() . '/health.json'; }
-function disk_usage_file(): string     { return config_base() . '/disk_usage.json'; }
+function disk_usage_file(): string        { return config_base() . '/disk_usage.json'; }
+function reconcile_trigger_file(): string { return config_base() . '/.reconcile_trigger'; }
+function preview_trigger_file(): string   { return config_base() . '/.preview_trigger'; }
+function preview_file(): string           { return config_base() . '/preview.json'; }
+function reconcile_file(): string         { return config_base() . '/reconcile_results.json'; }
 
 function load_settings(): array {
     $defaults = [
@@ -28,22 +32,27 @@ function load_settings(): array {
             'api_key' => getenv('TAUTULLI_API_KEY') ?: '',
         ],
         'sonarr' => [
-            'url'     => getenv('SONARR_URL') ?: '',
-            'api_key' => getenv('SONARR_API_KEY') ?: '',
+            'url'        => getenv('SONARR_URL') ?: '',
+            'api_key'    => getenv('SONARR_API_KEY') ?: '',
+            'assign_tag' => false,
+            'tag_name'   => '',
         ],
         'radarr' => [
-            'url'     => getenv('RADARR_URL') ?: '',
-            'api_key' => getenv('RADARR_API_KEY') ?: '',
+            'url'        => getenv('RADARR_URL') ?: '',
+            'api_key'    => getenv('RADARR_API_KEY') ?: '',
+            'assign_tag' => false,
+            'tag_name'   => '',
         ],
         'plex' => [
             'url'   => getenv('PLEX_URL') ?: '',
             'token' => getenv('PLEX_TOKEN') ?: '',
         ],
-        'watched_days'   => 30,
-        'dry_run'        => true,
-        'list_only'      => false,
-        'cron_schedule'  => '0 3 * * *',
-        'path_mappings'  => [],
+        'watched_days'    => 30,
+        'min_watch_count' => 1,
+        'dry_run'         => true,
+        'list_only'       => false,
+        'cron_schedule'   => '0 3 * * *',
+        'path_mappings'   => [],
     ];
 
     $file = settings_file();

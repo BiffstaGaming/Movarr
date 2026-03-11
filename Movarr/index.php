@@ -620,6 +620,26 @@ $extra_head = <<<'CSS'
 .dash-row-actions .dash-act-btn { flex: none; padding: 2px 6px; font-size: .65rem; }
 .sc-tbl-actions .dash-act-btn { flex: none; padding: 2px 5px; font-size: .65rem; }
 
+/* ── Bulk action bar ── */
+#dash-bulk-bar {
+  margin-bottom: .75rem; padding: .45rem .75rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  align-items: center; gap: .5rem; flex-wrap: wrap;
+}
+
+/* ── Poster card checkbox overlay ── */
+.sc-card-check {
+  position: absolute; top: 4px; left: 4px; z-index: 4;
+  opacity: 0; pointer-events: none; transition: opacity .1s;
+}
+.sc-card:hover .sc-card-check,
+.sc-card-check.cb-visible { opacity: 1; pointer-events: all; }
+.sc-card-check input { accent-color: var(--accent); cursor: pointer; width: 16px; height: 16px; }
+
+/* ── Dash table check column ── */
+.dash-tbl-check { flex: 0 0 28px; justify-content: center; }
+.dash-tbl-check input { accent-color: var(--accent); cursor: pointer; }
+
 /* ── Search field ── */
 .tb-search {
   display: flex; align-items: center;
@@ -807,6 +827,17 @@ layout_start('Library', 'dashboard', $extra_head);
   </div>
 </div>
 
+<!-- ── Bulk action bar ── -->
+<div id="dash-bulk-bar" style="display:none">
+  <span style="font-size:.8rem;color:var(--muted)"><span id="dash-bulk-count">0</span> selected</span>
+  <div style="flex:1"></div>
+  <button class="dash-act-btn act-fast" style="flex:none;padding:.25rem .6rem;font-size:.7rem" onclick="dashBulkAction('move_to_fast')">→&nbsp;Fast</button>
+  <button class="dash-act-btn act-slow" style="flex:none;padding:.25rem .6rem;font-size:.7rem" onclick="dashBulkAction('move_to_slow')">←&nbsp;Slow</button>
+  <button class="dash-act-btn act-track" style="flex:none;padding:.25rem .6rem;font-size:.7rem" onclick="dashBulkAction('track')">Track</button>
+  <button class="dash-act-btn act-untrack" style="flex:none;padding:.25rem .6rem;font-size:.7rem" onclick="dashBulkAction('untrack')">Untrack</button>
+  <button class="btn" style="padding:.25rem .6rem;font-size:.7rem" onclick="dashClearSelection()">Clear</button>
+</div>
+
 <?php if ($lib_count === 0): ?>
 <!-- ── No library yet ── -->
 <div class="sc-no-library">
@@ -839,9 +870,19 @@ layout_start('Library', 'dashboard', $extra_head);
   data-location="<?= htmlspecialchars($loc) ?>"
   data-tracked="<?= $tr ? '1' : '0' ?>"
   data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
-  data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
+  data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>"
+  data-ext-id="<?= (int)$row['external_id'] ?>"
+  data-service="<?= htmlspecialchars($row['service']) ?>"
+  data-mapping-id="<?= htmlspecialchars($row['mapping_id'] ?? '') ?>"
+  data-folder="<?= htmlspecialchars($row['folder'] ?? '', ENT_QUOTES) ?>"
+  data-media-type="show"
+  data-size-on-disk="<?= (int)$row['size_on_disk'] ?>"
+  data-track-id="<?= $tr ? (int)$tr['id'] : '' ?>">
 
   <div class="sc-poster">
+    <div class="sc-card-check">
+      <input type="checkbox" class="dash-check" onchange="dashCheckChange(this)">
+    </div>
     <?php if ($row['poster_url']): ?>
       <img src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -880,9 +921,19 @@ layout_start('Library', 'dashboard', $extra_head);
   data-location="<?= htmlspecialchars($loc) ?>"
   data-tracked="<?= $tr ? '1' : '0' ?>"
   data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
-  data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
+  data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>"
+  data-ext-id="<?= (int)$row['external_id'] ?>"
+  data-service="<?= htmlspecialchars($row['service']) ?>"
+  data-mapping-id="<?= htmlspecialchars($row['mapping_id'] ?? '') ?>"
+  data-folder="<?= htmlspecialchars($row['folder'] ?? '', ENT_QUOTES) ?>"
+  data-media-type="movie"
+  data-size-on-disk="<?= (int)$row['size_on_disk'] ?>"
+  data-track-id="<?= $tr ? (int)$tr['id'] : '' ?>">
 
   <div class="sc-poster">
+    <div class="sc-card-check">
+      <input type="checkbox" class="dash-check" onchange="dashCheckChange(this)">
+    </div>
     <?php if ($row['poster_url']): ?>
       <img src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -926,7 +977,15 @@ layout_start('Library', 'dashboard', $extra_head);
     data-location="<?= htmlspecialchars($loc) ?>"
     data-tracked="<?= $tr ? '1' : '0' ?>"
     data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
-    data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
+    data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>"
+    data-ext-id="<?= (int)$row['external_id'] ?>"
+    data-service="<?= htmlspecialchars($row['service']) ?>"
+    data-mapping-id="<?= htmlspecialchars($row['mapping_id'] ?? '') ?>"
+    data-folder="<?= htmlspecialchars($row['folder'] ?? '', ENT_QUOTES) ?>"
+    data-media-type="show"
+    data-size-on-disk="<?= (int)$row['size_on_disk'] ?>"
+    data-track-id="<?= $tr ? (int)$tr['id'] : '' ?>">
+    <input type="checkbox" class="dash-check" style="margin-right:.5rem;accent-color:var(--accent);cursor:pointer;flex-shrink:0" onchange="dashCheckChange(this)">
     <?php if ($row['poster_url']): ?>
       <img class="ov-thumb" src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -967,7 +1026,15 @@ layout_start('Library', 'dashboard', $extra_head);
     data-location="<?= htmlspecialchars($loc) ?>"
     data-tracked="<?= $tr ? '1' : '0' ?>"
     data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
-    data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>">
+    data-movedate="<?= ($tr && $tr['moved_at'] && $tr['relocate_after'] && $tr['relocate_after'] > time()) ? (int)$tr['relocate_after'] : 0 ?>"
+    data-ext-id="<?= (int)$row['external_id'] ?>"
+    data-service="<?= htmlspecialchars($row['service']) ?>"
+    data-mapping-id="<?= htmlspecialchars($row['mapping_id'] ?? '') ?>"
+    data-folder="<?= htmlspecialchars($row['folder'] ?? '', ENT_QUOTES) ?>"
+    data-media-type="movie"
+    data-size-on-disk="<?= (int)$row['size_on_disk'] ?>"
+    data-track-id="<?= $tr ? (int)$tr['id'] : '' ?>">
+    <input type="checkbox" class="dash-check" style="margin-right:.5rem;accent-color:var(--accent);cursor:pointer;flex-shrink:0" onchange="dashCheckChange(this)">
     <?php if ($row['poster_url']): ?>
       <img class="ov-thumb" src="<?= htmlspecialchars($row['poster_url']) ?>"
            alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -1007,6 +1074,9 @@ layout_start('Library', 'dashboard', $extra_head);
   <?php else: ?>
   <div class="card sc-tbl" id="tbl-container">
     <div class="sc-tbl-header">
+      <div class="sc-tbl-cell dash-tbl-check">
+        <input type="checkbox" id="dash-check-all" title="Select all" onchange="dashToggleAll(this.checked)">
+      </div>
       <div class="sc-tbl-cell sc-tbl-title sort-col" data-col="title" onclick="setSort('title',null)">
         Title <span class="th-arrow">↑</span>
       </div>
@@ -1044,7 +1114,17 @@ layout_start('Library', 'dashboard', $extra_head);
       data-location="<?= htmlspecialchars($loc) ?>"
       data-tracked="<?= $tr ? '1' : '0' ?>"
       data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
-      data-movedate="<?= $ts_move ?>">
+      data-movedate="<?= $ts_move ?>"
+      data-ext-id="<?= (int)$row['external_id'] ?>"
+      data-service="<?= htmlspecialchars($row['service']) ?>"
+      data-mapping-id="<?= htmlspecialchars($row['mapping_id'] ?? '') ?>"
+      data-folder="<?= htmlspecialchars($row['folder'] ?? '', ENT_QUOTES) ?>"
+      data-media-type="show"
+      data-size-on-disk="<?= (int)$row['size_on_disk'] ?>"
+      data-track-id="<?= $tr ? (int)$tr['id'] : '' ?>">
+      <div class="sc-tbl-cell dash-tbl-check">
+        <input type="checkbox" class="dash-check" onchange="dashCheckChange(this)">
+      </div>
       <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600"><?= htmlspecialchars($row['title']) ?></div>
       <div class="sc-tbl-cell sc-tbl-type"><span class="badge badge-muted" style="font-size:.68rem">TV</span></div>
       <div class="sc-tbl-cell sc-tbl-location col-location">
@@ -1075,7 +1155,17 @@ layout_start('Library', 'dashboard', $extra_head);
       data-location="<?= htmlspecialchars($loc) ?>"
       data-tracked="<?= $tr ? '1' : '0' ?>"
       data-storage="<?= $loc === 'fast' ? '1' : '0' ?>"
-      data-movedate="<?= $ts_move ?>">
+      data-movedate="<?= $ts_move ?>"
+      data-ext-id="<?= (int)$row['external_id'] ?>"
+      data-service="<?= htmlspecialchars($row['service']) ?>"
+      data-mapping-id="<?= htmlspecialchars($row['mapping_id'] ?? '') ?>"
+      data-folder="<?= htmlspecialchars($row['folder'] ?? '', ENT_QUOTES) ?>"
+      data-media-type="movie"
+      data-size-on-disk="<?= (int)$row['size_on_disk'] ?>"
+      data-track-id="<?= $tr ? (int)$tr['id'] : '' ?>">
+      <div class="sc-tbl-cell dash-tbl-check">
+        <input type="checkbox" class="dash-check" onchange="dashCheckChange(this)">
+      </div>
       <div class="sc-tbl-cell sc-tbl-title" style="font-weight:600">
         <?= htmlspecialchars($row['title']) ?><?= $row['year'] ? ' <span style="color:var(--muted);font-weight:400">('.(int)$row['year'].')</span>' : '' ?>
       </div>
@@ -1441,6 +1531,138 @@ function pollSyncCompletion(stateKey, beforeTs) {
   }
 
   applyAll();
+})();
+
+// ── Bulk selection ──────────────────────────────────────────────────────────
+(function() {
+  // Key: "extId:service:mappingId"
+  var selected = new Set();
+
+  function itemKey(el) {
+    var d = el.dataset || {};
+    return (d.extId || '') + ':' + (d.service || '') + ':' + (d.mappingId || '');
+  }
+
+  function getRow(cb) {
+    return cb.closest('[data-ext-id]');
+  }
+
+  window.dashCheckChange = function(cb) {
+    var row = getRow(cb);
+    if (!row) return;
+    var key = itemKey(row);
+    if (cb.checked) {
+      selected.add(key);
+      // Make poster checkbox visible until cleared
+      var wrap = cb.closest('.sc-card-check');
+      if (wrap) wrap.classList.add('cb-visible');
+    } else {
+      selected.delete(key);
+      var wrap = cb.closest('.sc-card-check');
+      if (wrap) wrap.classList.remove('cb-visible');
+    }
+    // Sync across all views
+    document.querySelectorAll('[data-ext-id] .dash-check').forEach(function(c) {
+      var r = getRow(c);
+      if (!r) return;
+      var k = itemKey(r);
+      if (k !== key) return;
+      c.checked = selected.has(key);
+      var w = c.closest('.sc-card-check');
+      if (w) w.classList.toggle('cb-visible', c.checked);
+    });
+    dashUpdateBulkBar();
+  };
+
+  window.dashToggleAll = function(checked) {
+    document.querySelectorAll('#tbl-container .sc-tbl-row').forEach(function(row) {
+      if (row.style.display === 'none') return;
+      var key = itemKey(row);
+      if (checked) selected.add(key); else selected.delete(key);
+    });
+    // Sync all checkboxes
+    document.querySelectorAll('[data-ext-id] .dash-check').forEach(function(c) {
+      var r = getRow(c); if (!r) return;
+      var k = itemKey(r);
+      c.checked = selected.has(k);
+      var w = c.closest('.sc-card-check');
+      if (w) w.classList.toggle('cb-visible', c.checked);
+    });
+    dashUpdateBulkBar();
+  };
+
+  window.dashUpdateBulkBar = function() {
+    var bar     = document.getElementById('dash-bulk-bar');
+    var countEl = document.getElementById('dash-bulk-count');
+    var allCb   = document.getElementById('dash-check-all');
+    var visible = [...document.querySelectorAll('#tbl-container .sc-tbl-row')].filter(function(r) {
+      return r.style.display !== 'none';
+    });
+    var checkedVisible = visible.filter(function(r) { return selected.has(itemKey(r)); });
+    if (countEl) countEl.textContent = selected.size;
+    if (bar)     bar.style.display   = selected.size > 0 ? 'flex' : 'none';
+    if (allCb) {
+      allCb.indeterminate = checkedVisible.length > 0 && checkedVisible.length < visible.length;
+      allCb.checked       = visible.length > 0 && checkedVisible.length === visible.length;
+    }
+  };
+
+  window.dashClearSelection = function() {
+    selected.clear();
+    document.querySelectorAll('[data-ext-id] .dash-check').forEach(function(c) {
+      c.checked = false;
+      var w = c.closest('.sc-card-check');
+      if (w) w.classList.remove('cb-visible');
+    });
+    var allCb = document.getElementById('dash-check-all');
+    if (allCb) { allCb.checked = false; allCb.indeterminate = false; }
+    dashUpdateBulkBar();
+  };
+
+  window.dashBulkAction = function(action) {
+    if (!selected.size) return;
+    var label = {
+      move_to_fast: 'Move ' + selected.size + ' item(s) to fast storage?',
+      move_to_slow: 'Move ' + selected.size + ' item(s) to slow storage?',
+      track:        'Track ' + selected.size + ' item(s)?',
+      untrack:      'Untrack ' + selected.size + ' item(s)?',
+    }[action] || 'Apply to ' + selected.size + ' item(s)?';
+    if (!confirm(label)) return;
+
+    // Collect unique rows (one per key) from any view
+    var byKey = {};
+    document.querySelectorAll('[data-ext-id]').forEach(function(r) {
+      var k = itemKey(r);
+      if (!selected.has(k) || byKey[k]) return;
+      byKey[k] = r;
+    });
+
+    var rows = Object.values(byKey);
+    var done = 0;
+
+    function next(i) {
+      if (i >= rows.length) { dashClearSelection(); location.reload(); return; }
+      var row   = rows[i];
+      var d     = row.dataset;
+      var form  = new FormData();
+      form.append('_ajax',           '1');
+      form.append('action',          action);
+      form.append('external_id',     d.extId      || '');
+      form.append('service',         d.service    || '');
+      form.append('mapping_id',      d.mappingId  || '');
+      form.append('title',           row.querySelector('.sc-tbl-title,.ov-title,.sc-title')?.textContent?.trim() || '');
+      form.append('folder',          d.folder     || '');
+      form.append('current_location',d.location   || '');
+      form.append('media_type',      d.mediaType  || '');
+      form.append('track_id',        d.trackId    || '');
+      form.append('size_on_disk',    d.sizeOnDisk || '0');
+      form.append('wrap_cls',        'dash-row-actions');
+      fetch('index.php', { method: 'POST', body: form })
+        .catch(function() {})
+        .finally(function() { next(i + 1); });
+    }
+    next(0);
+  };
 })();
 </script>
 

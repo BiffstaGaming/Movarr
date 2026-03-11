@@ -14,6 +14,7 @@ function layout_start(string $title, string $active, string $extra_head = ''): v
             'children' => [
                 ['key' => 'queue',   'href' => 'queue.php',   'label' => 'Queue'],
                 ['key' => 'history', 'href' => 'history.php', 'label' => 'History'],
+                ['key' => 'preview', 'href' => 'preview.php', 'label' => 'Move Preview'],
             ],
         ],
         ['type' => 'group', 'key' => 'system', 'label' => 'System',
@@ -189,7 +190,7 @@ body {
   max-height: 0;
   transition: max-height .22s ease;
 }
-.nav-group.expanded .nav-group-children { max-height: 200px; }
+.nav-group.expanded .nav-group-children { max-height: 300px; }
 
 .nav-child-link {
   display: flex;

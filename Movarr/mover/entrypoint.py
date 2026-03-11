@@ -26,13 +26,17 @@ try:
 except ImportError:
     HAS_CRONITER = False
 
-CONFIG_DIR          = Path(os.getenv('CONFIG_PATH', '/config'))
-TRIGGER_FILE        = CONFIG_DIR / '.trigger'
-MANUAL_TRIGGER_FILE = CONFIG_DIR / '.manual_trigger'
-SETTINGS_FILE       = CONFIG_DIR / 'settings.json'
-DISK_USAGE_FILE     = CONFIG_DIR / 'disk_usage.json'
-MOVER_SCRIPT        = Path(__file__).parent / 'mover.py'
-MANUAL_SCRIPT       = Path(__file__).parent / 'manual_move.py'
+CONFIG_DIR             = Path(os.getenv('CONFIG_PATH', '/config'))
+TRIGGER_FILE           = CONFIG_DIR / '.trigger'
+MANUAL_TRIGGER_FILE    = CONFIG_DIR / '.manual_trigger'
+RECONCILE_TRIGGER_FILE = CONFIG_DIR / '.reconcile_trigger'
+PREVIEW_TRIGGER_FILE   = CONFIG_DIR / '.preview_trigger'
+SETTINGS_FILE          = CONFIG_DIR / 'settings.json'
+DISK_USAGE_FILE        = CONFIG_DIR / 'disk_usage.json'
+MOVER_SCRIPT           = Path(__file__).parent / 'mover.py'
+MANUAL_SCRIPT          = Path(__file__).parent / 'manual_move.py'
+RECONCILE_SCRIPT       = Path(__file__).parent / 'reconcile.py'
+PREVIEW_SCRIPT         = Path(__file__).parent / 'preview.py'
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,6 +137,24 @@ def run_manual_mover() -> None:
         log.info("manual_move.py finished successfully")
 
 
+def run_reconcile() -> None:
+    log.info("Starting reconcile.py ...")
+    result = subprocess.run([sys.executable, str(RECONCILE_SCRIPT)])
+    if result.returncode != 0:
+        log.error(f"reconcile.py exited with code {result.returncode}")
+    else:
+        log.info("reconcile.py finished successfully")
+
+
+def run_preview() -> None:
+    log.info("Starting preview.py ...")
+    result = subprocess.run([sys.executable, str(PREVIEW_SCRIPT)])
+    if result.returncode != 0:
+        log.error(f"preview.py exited with code {result.returncode}")
+    else:
+        log.info("preview.py finished successfully")
+
+
 def check_config_writable() -> None:
     import stat
     test_file = CONFIG_DIR / '.write_test'
@@ -166,6 +188,16 @@ def main() -> None:
             cron_expr = new_cron
             next_run  = next_run_time(cron_expr)
             log.info(f"Schedule changed → {cron_expr}  next run: {next_run:%Y-%m-%d %H:%M:%S}")
+
+        if RECONCILE_TRIGGER_FILE.exists():
+            RECONCILE_TRIGGER_FILE.unlink(missing_ok=True)
+            log.info("Reconcile trigger detected — running reconcile.py")
+            run_reconcile()
+
+        if PREVIEW_TRIGGER_FILE.exists():
+            PREVIEW_TRIGGER_FILE.unlink(missing_ok=True)
+            log.info("Preview trigger detected — running preview.py")
+            run_preview()
 
         if MANUAL_TRIGGER_FILE.exists():
             MANUAL_TRIGGER_FILE.unlink(missing_ok=True)

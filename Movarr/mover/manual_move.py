@@ -460,6 +460,12 @@ def rsync_move(src: Path, dst: Path, log: logging.Logger,
     if result.returncode != 0:
         log.error('rsync exited %d -- source left intact. %s',
                   result.returncode, result.stderr[:200])
+        if dst.exists():
+            try:
+                shutil.rmtree(str(dst))
+                log.info('Cleaned up partial destination: %s', dst)
+            except Exception as exc:
+                log.error('Failed to clean up partial destination %s: %s', dst, exc)
         return False, ''
 
     if summary:
@@ -511,6 +517,17 @@ def update_sonarr_path(series: dict, new_path: str, settings: dict,
         resp = requests.put(sonarr['url'].rstrip('/') + '/api/v3/series/' + str(series['id']),
                             headers=headers, json=payload, timeout=30)
         if resp.ok:
+            try:
+                vresp = requests.get(sonarr['url'].rstrip('/') + '/api/v3/series/' + str(series['id']),
+                                     headers={'X-Api-Key': sonarr['api_key']}, timeout=15)
+                if vresp.ok:
+                    actual = vresp.json().get('path', '').rstrip('/')
+                    if actual != new_path.rstrip('/'):
+                        log.warning("Sonarr path verification mismatch for '%s': expected '%s', got '%s'",
+                                    series['title'], new_path, actual)
+                        return False
+            except Exception as exc:
+                log.warning('Sonarr path verification request failed: %s', exc)
             log.info("Sonarr path updated: '%s' -> %s", series['title'], new_path)
             return True
         log.error('Sonarr PUT failed %d: %s', resp.status_code, resp.text[:300])
@@ -541,6 +558,17 @@ def update_radarr_path(movie: dict, new_path: str, settings: dict,
         resp = requests.put(radarr['url'].rstrip('/') + '/api/v3/movie/' + str(movie['id']),
                             headers=headers, json=payload, timeout=30)
         if resp.ok:
+            try:
+                vresp = requests.get(radarr['url'].rstrip('/') + '/api/v3/movie/' + str(movie['id']),
+                                     headers={'X-Api-Key': radarr['api_key']}, timeout=15)
+                if vresp.ok:
+                    actual = vresp.json().get('path', '').rstrip('/')
+                    if actual != new_path.rstrip('/'):
+                        log.warning("Radarr path verification mismatch for '%s': expected '%s', got '%s'",
+                                    movie['title'], new_path, actual)
+                        return False
+            except Exception as exc:
+                log.warning('Radarr path verification request failed: %s', exc)
             log.info("Radarr path updated: '%s' -> %s", movie['title'], new_path)
             return True
         log.error('Radarr PUT failed %d: %s', resp.status_code, resp.text[:300])
@@ -559,6 +587,70 @@ def rescan_movie(movie_id: int, settings: dict, log: logging.Logger) -> None:
         log.info('Radarr rescan triggered for movie ID %d', movie_id)
     except Exception as exc:
         log.error('Radarr rescan exception: %s', exc)
+
+
+# -- Service tags --------------------------------------------------------------
+
+def get_or_create_tag(service_cfg: dict, service_name: str, tag_name: str,
+                      log: logging.Logger) -> int | None:
+    """Return the tag ID for tag_name in Sonarr/Radarr, creating it if missing."""
+    headers  = {'X-Api-Key': service_cfg['api_key']}
+    base_url = service_cfg['url'].rstrip('/')
+    try:
+        resp = requests.get(base_url + '/api/v3/tag', headers=headers, timeout=15)
+        if resp.ok:
+            for tag in resp.json():
+                if tag.get('label', '').lower() == tag_name.lower():
+                    return tag['id']
+        create = requests.post(base_url + '/api/v3/tag',
+                               headers={**headers, 'Content-Type': 'application/json'},
+                               json={'label': tag_name}, timeout=15)
+        if create.ok:
+            tag_id = create.json()['id']
+            log.info('%s: created tag "%s" (id=%d)', service_name, tag_name, tag_id)
+            return tag_id
+        log.warning('%s: failed to create tag "%s": %d', service_name, tag_name, create.status_code)
+    except Exception as exc:
+        log.warning('%s: tag fetch/create error: %s', service_name, exc)
+    return None
+
+
+def apply_tag_to_series(series: dict, tag_id: int, settings: dict, log: logging.Logger) -> None:
+    """Add tag_id to a Sonarr series (no-op if already tagged)."""
+    if tag_id in series.get('tags', []):
+        return
+    sonarr  = settings['sonarr']
+    headers = {'X-Api-Key': sonarr['api_key'], 'Content-Type': 'application/json'}
+    payload = dict(series)
+    payload['tags'] = list(series.get('tags', [])) + [tag_id]
+    try:
+        resp = requests.put(sonarr['url'].rstrip('/') + '/api/v3/series/' + str(series['id']),
+                            headers=headers, json=payload, timeout=30)
+        if resp.ok:
+            log.info("Sonarr: applied tag %d to '%s'", tag_id, series['title'])
+        else:
+            log.warning("Sonarr: tag apply failed for '%s': %d", series['title'], resp.status_code)
+    except Exception as exc:
+        log.warning("Sonarr: tag apply exception for '%s': %s", series['title'], exc)
+
+
+def apply_tag_to_movie(movie: dict, tag_id: int, settings: dict, log: logging.Logger) -> None:
+    """Add tag_id to a Radarr movie (no-op if already tagged)."""
+    if tag_id in movie.get('tags', []):
+        return
+    radarr  = settings['radarr']
+    headers = {'X-Api-Key': radarr['api_key'], 'Content-Type': 'application/json'}
+    payload = dict(movie)
+    payload['tags'] = list(movie.get('tags', [])) + [tag_id]
+    try:
+        resp = requests.put(radarr['url'].rstrip('/') + '/api/v3/movie/' + str(movie['id']),
+                            headers=headers, json=payload, timeout=30)
+        if resp.ok:
+            log.info("Radarr: applied tag %d to '%s'", tag_id, movie['title'])
+        else:
+            log.warning("Radarr: tag apply failed for '%s': %d", movie['title'], resp.status_code)
+    except Exception as exc:
+        log.warning("Radarr: tag apply exception for '%s': %s", movie['title'], exc)
 
 
 def notify_plex(settings: dict, new_path: str, log: logging.Logger) -> bool:
@@ -656,6 +748,16 @@ def main() -> None:
 
     active_titles = get_active_titles(settings, log)
 
+    sonarr_tag_id = None
+    sonarr_cfg = settings.get('sonarr', {})
+    if sonarr_cfg.get('assign_tag') and sonarr_cfg.get('tag_name'):
+        sonarr_tag_id = get_or_create_tag(sonarr_cfg, 'Sonarr', sonarr_cfg['tag_name'], log)
+
+    radarr_tag_id = None
+    radarr_cfg = settings.get('radarr', {})
+    if radarr_cfg.get('assign_tag') and radarr_cfg.get('tag_name'):
+        radarr_tag_id = get_or_create_tag(radarr_cfg, 'Radarr', radarr_cfg['tag_name'], log)
+
     now         = int(time.time())
     relocate_ts = now + (days * 86400)
 
@@ -712,9 +814,21 @@ def main() -> None:
                                    name, direction, str(src), str(dst))
 
             if not src.exists():
-                log.warning('Source not found on disk: %s', src)
-                queue.skip(q_idx, 'Source not found on disk')
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
+                if dst.exists():
+                    # Already at the destination — stale tracked_media record.
+                    log.warning('"%s": source not at expected path %s', title, src)
+                    log.warning('  Found at destination %s — correcting tracked location to "%s"',
+                                dst, new_location)
+                    sz = folder_size_bytes(dst)
+                    db_upsert(db, media_type, title, external_id, service,
+                              mapping_id, folder, new_location, 'manual', notes,
+                              relocate_after, sz)
+                    queue.skip(q_idx, f'Already at {new_location} — location corrected')
+                    db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
+                else:
+                    log.warning('Source not found on disk: %s', src)
+                    queue.skip(q_idx, 'Source not found on disk')
+                    db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
                 db.commit()
                 continue
 
@@ -724,6 +838,24 @@ def main() -> None:
                 db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
                 db.commit()
                 continue
+            if direction == 'to_fast':
+                min_free_pct = float(mapping.get('fast_min_free_pct') or 0)
+                if min_free_pct > 0:
+                    check = dst.parent
+                    while not check.exists() and check != check.parent:
+                        check = check.parent
+                    try:
+                        du = shutil.disk_usage(str(check))
+                        free_pct = (du.free / du.total) * 100
+                        if free_pct < min_free_pct:
+                            log.warning('Skipping "%s" — fast storage %.1f%% free (floor: %.1f%%)',
+                                        title, free_pct, min_free_pct)
+                            queue.skip(q_idx, f'Fast storage too full ({free_pct:.1f}% free, need {min_free_pct:.1f}%)')
+                            db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
+                            db.commit()
+                            continue
+                    except Exception:
+                        pass
             if normalize(title) in active_titles:
                 log.warning('Skipping "%s" — currently being watched in Plex', title)
                 queue.skip(q_idx, 'Currently being watched')
@@ -752,8 +884,14 @@ def main() -> None:
                           mapping_id, folder, new_location, 'manual', notes, relocate_after,
                           size_bytes)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
+                if direction == 'to_fast' and sonarr_tag_id:
+                    apply_tag_to_series(item, sonarr_tag_id, settings, log)
             else:
                 queue.error(q_idx, 'rsync failed')
+                db_record_history(db, media_type, title, external_id, service,
+                                  mapping_id, folder, direction, src, dst,
+                                  'manual', False, False, 'rsync failed',
+                                  t_taken, size_bytes)
                 db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
 
         elif service == 'radarr':
@@ -785,9 +923,21 @@ def main() -> None:
                                    name, direction, str(src), str(dst))
 
             if not src.exists():
-                log.warning('Source not found on disk: %s', src)
-                queue.skip(q_idx, 'Source not found on disk')
-                db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
+                if dst.exists():
+                    # Already at the destination — stale tracked_media record.
+                    log.warning('"%s": source not at expected path %s', title, src)
+                    log.warning('  Found at destination %s — correcting tracked location to "%s"',
+                                dst, new_location)
+                    sz = folder_size_bytes(dst)
+                    db_upsert(db, media_type, title, external_id, service,
+                              mapping_id, folder, new_location, 'manual', notes,
+                              relocate_after, sz)
+                    queue.skip(q_idx, f'Already at {new_location} — location corrected')
+                    db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
+                else:
+                    log.warning('Source not found on disk: %s', src)
+                    queue.skip(q_idx, 'Source not found on disk')
+                    db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
                 db.commit()
                 continue
 
@@ -797,6 +947,24 @@ def main() -> None:
                 db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
                 db.commit()
                 continue
+            if direction == 'to_fast':
+                min_free_pct = float(mapping.get('fast_min_free_pct') or 0)
+                if min_free_pct > 0:
+                    check = dst.parent
+                    while not check.exists() and check != check.parent:
+                        check = check.parent
+                    try:
+                        du = shutil.disk_usage(str(check))
+                        free_pct = (du.free / du.total) * 100
+                        if free_pct < min_free_pct:
+                            log.warning('Skipping "%s" — fast storage %.1f%% free (floor: %.1f%%)',
+                                        title, free_pct, min_free_pct)
+                            queue.skip(q_idx, f'Fast storage too full ({free_pct:.1f}% free, need {min_free_pct:.1f}%)')
+                            db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
+                            db.commit()
+                            continue
+                    except Exception:
+                        pass
             if normalize(title) in active_titles:
                 log.warning('Skipping "%s" — currently being watched in Plex', title)
                 queue.skip(q_idx, 'Currently being watched')
@@ -825,8 +993,14 @@ def main() -> None:
                           mapping_id, folder, new_location, 'manual', notes, relocate_after,
                           size_bytes)
                 db.execute("UPDATE pending_moves SET status='done' WHERE id=?", (pm_id,))
+                if direction == 'to_fast' and radarr_tag_id:
+                    apply_tag_to_movie(item, radarr_tag_id, settings, log)
             else:
                 queue.error(q_idx, 'rsync failed')
+                db_record_history(db, media_type, title, external_id, service,
+                                  mapping_id, folder, direction, src, dst,
+                                  'manual', False, False, 'rsync failed',
+                                  t_taken, size_bytes)
                 db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
 
         db.commit()

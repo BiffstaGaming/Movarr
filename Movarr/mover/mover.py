@@ -489,7 +489,7 @@ def get_watched(settings: dict, log: logging.Logger) -> tuple:
     days      = int(settings.get('watched_days', 30))
     after_str = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
-    shows: dict = {}
+    shows: dict = {}  # rk -> [title, play_count]
     start, page = 0, 1000
     while True:
         try:
@@ -505,15 +505,22 @@ def get_watched(settings: dict, log: logging.Logger) -> tuple:
             rk = str(r.get('grandparent_rating_key', '')).strip()
             title = r.get('grandparent_title', '').strip()
             if rk and title:
-                shows[rk] = title
+                if rk in shows:
+                    shows[rk][1] += 1
+                else:
+                    shows[rk] = [title, 1]
         if len(records) < page:
             break
         start += page
 
+    min_count = int(settings.get('min_watch_count', 1))
     log.info('Tautulli: %d unique shows watched in last %d days', len(shows), days)
     watched_tvdb_ids: set = set()
     watched_titles:   set = set()
-    for rk, title in shows.items():
+    for rk, (title, count) in shows.items():
+        if count < min_count:
+            log.debug('  Skipping "%s" — %d episode(s) watched (min: %d)', title, count, min_count)
+            continue
         tvdb_id = get_id_from_plex(rk, tautulli, 'tvdb', log)
         if tvdb_id:
             watched_tvdb_ids.add(tvdb_id)
@@ -532,7 +539,7 @@ def get_watched_movies(settings: dict, log: logging.Logger) -> tuple:
     days      = int(settings.get('watched_days', 30))
     after_str = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
-    movies: dict = {}
+    movies: dict = {}  # rk -> [title, play_count]
     start, page = 0, 1000
     while True:
         try:
@@ -548,15 +555,22 @@ def get_watched_movies(settings: dict, log: logging.Logger) -> tuple:
             rk = str(r.get('rating_key', '')).strip()
             title = r.get('title', '').strip()
             if rk and title:
-                movies[rk] = title
+                if rk in movies:
+                    movies[rk][1] += 1
+                else:
+                    movies[rk] = [title, 1]
         if len(records) < page:
             break
         start += page
 
+    min_count = int(settings.get('min_watch_count', 1))
     log.info('Tautulli: %d unique movies watched in last %d days', len(movies), days)
     watched_tmdb_ids: set = set()
     watched_titles:   set = set()
-    for rk, title in movies.items():
+    for rk, (title, count) in movies.items():
+        if count < min_count:
+            log.debug('  Skipping "%s" — %d watch(es) (min: %d)', title, count, min_count)
+            continue
         tmdb_id = get_id_from_plex(rk, tautulli, 'tmdb', log)
         if tmdb_id:
             watched_tmdb_ids.add(tmdb_id)
@@ -595,6 +609,17 @@ def update_sonarr_path(series: dict, new_path: str, settings: dict,
         resp = requests.put(sonarr['url'].rstrip('/') + '/api/v3/series/' + str(series['id']),
                             headers=headers, json=payload, timeout=30)
         if resp.ok:
+            try:
+                vresp = requests.get(sonarr['url'].rstrip('/') + '/api/v3/series/' + str(series['id']),
+                                     headers={'X-Api-Key': sonarr['api_key']}, timeout=15)
+                if vresp.ok:
+                    actual = vresp.json().get('path', '').rstrip('/')
+                    if actual != new_path.rstrip('/'):
+                        log.warning("Sonarr path verification mismatch for '%s': expected '%s', got '%s'",
+                                    series['title'], new_path, actual)
+                        return False
+            except Exception as exc:
+                log.warning('Sonarr path verification request failed: %s', exc)
             log.info("Sonarr path updated: '%s' -> %s", series['title'], new_path)
             return True
         log.error('Sonarr PUT failed %d: %s', resp.status_code, resp.text[:300])
@@ -648,6 +673,17 @@ def update_radarr_path(movie: dict, new_path: str, settings: dict,
         resp = requests.put(radarr['url'].rstrip('/') + '/api/v3/movie/' + str(movie['id']),
                             headers=headers, json=payload, timeout=30)
         if resp.ok:
+            try:
+                vresp = requests.get(radarr['url'].rstrip('/') + '/api/v3/movie/' + str(movie['id']),
+                                     headers={'X-Api-Key': radarr['api_key']}, timeout=15)
+                if vresp.ok:
+                    actual = vresp.json().get('path', '').rstrip('/')
+                    if actual != new_path.rstrip('/'):
+                        log.warning("Radarr path verification mismatch for '%s': expected '%s', got '%s'",
+                                    movie['title'], new_path, actual)
+                        return False
+            except Exception as exc:
+                log.warning('Radarr path verification request failed: %s', exc)
             log.info("Radarr path updated: '%s' -> %s", movie['title'], new_path)
             return True
         log.error('Radarr PUT failed %d: %s', resp.status_code, resp.text[:300])
@@ -670,6 +706,70 @@ def rescan_movie(movie_id: int, settings: dict, log: logging.Logger) -> bool:
     except Exception as exc:
         log.error('Radarr rescan exception: %s', exc)
     return False
+
+
+# -- Service tags --------------------------------------------------------------
+
+def get_or_create_tag(service_cfg: dict, service_name: str, tag_name: str,
+                      log: logging.Logger) -> int | None:
+    """Return the tag ID for tag_name in Sonarr/Radarr, creating it if missing."""
+    headers  = {'X-Api-Key': service_cfg['api_key']}
+    base_url = service_cfg['url'].rstrip('/')
+    try:
+        resp = requests.get(base_url + '/api/v3/tag', headers=headers, timeout=15)
+        if resp.ok:
+            for tag in resp.json():
+                if tag.get('label', '').lower() == tag_name.lower():
+                    return tag['id']
+        create = requests.post(base_url + '/api/v3/tag',
+                               headers={**headers, 'Content-Type': 'application/json'},
+                               json={'label': tag_name}, timeout=15)
+        if create.ok:
+            tag_id = create.json()['id']
+            log.info('%s: created tag "%s" (id=%d)', service_name, tag_name, tag_id)
+            return tag_id
+        log.warning('%s: failed to create tag "%s": %d', service_name, tag_name, create.status_code)
+    except Exception as exc:
+        log.warning('%s: tag fetch/create error: %s', service_name, exc)
+    return None
+
+
+def apply_tag_to_series(series: dict, tag_id: int, settings: dict, log: logging.Logger) -> None:
+    """Add tag_id to a Sonarr series (no-op if already tagged)."""
+    if tag_id in series.get('tags', []):
+        return
+    sonarr  = settings['sonarr']
+    headers = {'X-Api-Key': sonarr['api_key'], 'Content-Type': 'application/json'}
+    payload = dict(series)
+    payload['tags'] = list(series.get('tags', [])) + [tag_id]
+    try:
+        resp = requests.put(sonarr['url'].rstrip('/') + '/api/v3/series/' + str(series['id']),
+                            headers=headers, json=payload, timeout=30)
+        if resp.ok:
+            log.info("Sonarr: applied tag %d to '%s'", tag_id, series['title'])
+        else:
+            log.warning("Sonarr: tag apply failed for '%s': %d", series['title'], resp.status_code)
+    except Exception as exc:
+        log.warning("Sonarr: tag apply exception for '%s': %s", series['title'], exc)
+
+
+def apply_tag_to_movie(movie: dict, tag_id: int, settings: dict, log: logging.Logger) -> None:
+    """Add tag_id to a Radarr movie (no-op if already tagged)."""
+    if tag_id in movie.get('tags', []):
+        return
+    radarr  = settings['radarr']
+    headers = {'X-Api-Key': radarr['api_key'], 'Content-Type': 'application/json'}
+    payload = dict(movie)
+    payload['tags'] = list(movie.get('tags', [])) + [tag_id]
+    try:
+        resp = requests.put(radarr['url'].rstrip('/') + '/api/v3/movie/' + str(movie['id']),
+                            headers=headers, json=payload, timeout=30)
+        if resp.ok:
+            log.info("Radarr: applied tag %d to '%s'", tag_id, movie['title'])
+        else:
+            log.warning("Radarr: tag apply failed for '%s': %d", movie['title'], resp.status_code)
+    except Exception as exc:
+        log.warning("Radarr: tag apply exception for '%s': %s", movie['title'], exc)
 
 
 # -- Plex notification ---------------------------------------------------------
@@ -777,6 +877,12 @@ def rsync_move(src: Path, dst: Path, dry_run: bool,
     if result.returncode != 0:
         log.error('rsync exited %d -- source left intact. %s',
                   result.returncode, result.stderr[:200])
+        if not dry_run and dst.exists():
+            try:
+                shutil.rmtree(str(dst))
+                log.info('Cleaned up partial destination: %s', dst)
+            except Exception as exc:
+                log.error('Failed to clean up partial destination %s: %s', dst, exc)
         return False, ''
 
     if summary:
@@ -871,6 +977,12 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
 
     active_titles = get_active_titles(settings, log)
 
+    sonarr_tag_id = None
+    if not dry_run:
+        sonarr_cfg = settings.get('sonarr', {})
+        if sonarr_cfg.get('assign_tag') and sonarr_cfg.get('tag_name'):
+            sonarr_tag_id = get_or_create_tag(sonarr_cfg, 'Sonarr', sonarr_cfg['tag_name'], log)
+
     def do_move(series, src_base, dst_base, new_sonarr_base, location, q_idx):
         folder          = Path(series['path']).name
         src             = src_base / folder
@@ -886,6 +998,22 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
         if not dry_run and not preflight_disk(dst_base, size_bytes, series['title'], log):
             queue.skip(q_idx, 'Insufficient disk space')
             return
+        if location == 'fast' and not dry_run:
+            min_free_pct = float(mapping.get('fast_min_free_pct') or 0)
+            if min_free_pct > 0:
+                check = dst_base
+                while not check.exists() and check != check.parent:
+                    check = check.parent
+                try:
+                    du = shutil.disk_usage(str(check))
+                    free_pct = (du.free / du.total) * 100
+                    if free_pct < min_free_pct:
+                        log.warning('Skipping "%s" — fast storage %.1f%% free (floor: %.1f%%)',
+                                    series['title'], free_pct, min_free_pct)
+                        queue.skip(q_idx, f'Fast storage too full ({free_pct:.1f}% free, need {min_free_pct:.1f}%)')
+                        return
+                except Exception:
+                    pass
         if normalize(series['title']) in active_titles:
             log.warning('Skipping "%s" — currently being watched in Plex', series['title'])
             queue.skip(q_idx, 'Currently being watched')
@@ -910,9 +1038,16 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
                                       t_taken, size_bytes)
                     db_upsert(db, 'show', series['title'], tvdb_id, 'sonarr',
                               mapping_id, folder, location, 'auto', '', ra, size_bytes)
+                if location == 'fast' and sonarr_tag_id:
+                    apply_tag_to_series(series, sonarr_tag_id, settings, log)
         else:
             queue.error(q_idx, 'rsync failed')
             log.error('Move failed for: %s -- Sonarr NOT updated', folder)
+            if not dry_run and tvdb_id:
+                db_record_history(db, 'show', series['title'], tvdb_id, 'sonarr',
+                                  mapping_id, folder, direction, src, dst,
+                                  'auto', False, False, 'rsync failed',
+                                  t_taken, size_bytes)
 
     for series, q_idx in zip(to_fast, q_fast):
         do_move(series, slow_mover, fast_mover, fast_sonarr, 'fast', q_idx)
@@ -995,6 +1130,12 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
 
     active_titles = get_active_titles(settings, log)
 
+    radarr_tag_id = None
+    if not dry_run:
+        radarr_cfg = settings.get('radarr', {})
+        if radarr_cfg.get('assign_tag') and radarr_cfg.get('tag_name'):
+            radarr_tag_id = get_or_create_tag(radarr_cfg, 'Radarr', radarr_cfg['tag_name'], log)
+
     def do_move(movie, src_base, dst_base, new_radarr_base, location, q_idx):
         folder          = Path(movie['path']).name
         src             = src_base / folder
@@ -1010,6 +1151,22 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
         if not dry_run and not preflight_disk(dst_base, size_bytes, movie['title'], log):
             queue.skip(q_idx, 'Insufficient disk space')
             return
+        if location == 'fast' and not dry_run:
+            min_free_pct = float(mapping.get('fast_min_free_pct') or 0)
+            if min_free_pct > 0:
+                check = dst_base
+                while not check.exists() and check != check.parent:
+                    check = check.parent
+                try:
+                    du = shutil.disk_usage(str(check))
+                    free_pct = (du.free / du.total) * 100
+                    if free_pct < min_free_pct:
+                        log.warning('Skipping "%s" — fast storage %.1f%% free (floor: %.1f%%)',
+                                    movie['title'], free_pct, min_free_pct)
+                        queue.skip(q_idx, f'Fast storage too full ({free_pct:.1f}% free, need {min_free_pct:.1f}%)')
+                        return
+                except Exception:
+                    pass
         if normalize(movie['title']) in active_titles:
             log.warning('Skipping "%s" — currently being watched in Plex', movie['title'])
             queue.skip(q_idx, 'Currently being watched')
@@ -1034,9 +1191,16 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
                                       t_taken, size_bytes)
                     db_upsert(db, 'movie', movie['title'], tmdb_id, 'radarr',
                               mapping_id, folder, location, 'auto', '', ra, size_bytes)
+                if location == 'fast' and radarr_tag_id:
+                    apply_tag_to_movie(movie, radarr_tag_id, settings, log)
         else:
             queue.error(q_idx, 'rsync failed')
             log.error('Move failed for: %s -- Radarr NOT updated', folder)
+            if not dry_run and tmdb_id:
+                db_record_history(db, 'movie', movie['title'], tmdb_id, 'radarr',
+                                  mapping_id, folder, direction, src, dst,
+                                  'auto', False, False, 'rsync failed',
+                                  t_taken, size_bytes)
 
     for movie, q_idx in zip(to_fast, q_fast):
         do_move(movie, slow_mover, fast_mover, fast_radarr, 'fast', q_idx)

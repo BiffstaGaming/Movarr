@@ -1,6 +1,6 @@
 <?php
 // $m must be defined before including this file
-// Variables: id, name, service, slow_path_mover, fast_path_mover, slow_path_sonarr, fast_path_sonarr
+// Variables: id, name, service, slow_path_mover, fast_path_mover, slow_path_sonarr, fast_path_sonarr, fast_min_free_pct
 $m_id               = htmlspecialchars($m['id'] ?? '');
 $m_name             = htmlspecialchars($m['name'] ?? '');
 $m_service          = $m['service'] ?? 'sonarr';
@@ -8,6 +8,7 @@ $m_slow_mover       = htmlspecialchars($m['slow_path_mover'] ?? '');
 $m_fast_mover       = htmlspecialchars($m['fast_path_mover'] ?? '');
 $m_slow_sonarr      = htmlspecialchars($m['slow_path_sonarr'] ?? '');
 $m_fast_sonarr      = htmlspecialchars($m['fast_path_sonarr'] ?? '');
+$m_fast_min_free    = (float)($m['fast_min_free_pct'] ?? 0);
 ?>
 <div class="mapping-card">
   <input type="hidden" name="mapping_id[]" value="<?= $m_id ?>">
@@ -44,5 +45,11 @@ $m_fast_sonarr      = htmlspecialchars($m['fast_path_sonarr'] ?? '');
         <input type="text" name="mapping_fast_path_sonarr[]" value="<?= $m_fast_sonarr ?>" placeholder="/downloads">
       </div>
     </div>
+  </div>
+  <div style="margin-top:.6rem;display:flex;align-items:center;gap:.5rem">
+    <span style="font-size:.72rem;color:var(--muted)">Min free space on fast storage before moving to fast (%):</span>
+    <input type="number" name="mapping_fast_min_free_pct[]" value="<?= $m_fast_min_free ?>"
+           min="0" max="99" step="1" style="width:70px" placeholder="0">
+    <span style="font-size:.72rem;color:var(--muted)">Leave 0 to disable.</span>
   </div>
 </div>

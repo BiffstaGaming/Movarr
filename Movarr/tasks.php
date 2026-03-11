@@ -35,6 +35,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['queued' => true, 'type' => 'mover']);
         exit;
     }
+    if ($post_action === 'run_reconcile') {
+        @file_put_contents(reconcile_trigger_file(), date('Y-m-d H:i:s') . ' reconcile trigger' . PHP_EOL);
+        header('Content-Type: application/json');
+        echo json_encode(['queued' => true, 'type' => 'reconcile']);
+        exit;
+    }
 }
 
 // ── GET: sync status (polled by JS) ───────────────────────────────────────────
@@ -73,6 +79,14 @@ $pending_moves = (int)$db->query("SELECT COUNT(*) FROM pending_moves WHERE statu
 
 // Mover cron schedule from settings
 $mover_cron = $s['cron_schedule'] ?? '0 3 * * *';
+
+// Reconcile last run from results file
+$reconcile_data    = null;
+$reconcile_file_p  = reconcile_file();
+if (file_exists($reconcile_file_p)) {
+    $reconcile_data = json_decode(file_get_contents($reconcile_file_p), true);
+}
+$reconcile_last_ts = $reconcile_data ? strtotime($reconcile_data['run_at'] ?? '') : 0;
 
 /** Calculate next run for a simple "M H * * *" daily cron expression. Returns null for complex schedules. */
 function next_cron_run(string $expr): ?int {
@@ -278,6 +292,22 @@ layout_start('Tasks', 'tasks');
   </div>
   <div class="notice-queued" id="notice-mover">Mover triggered — will run shortly…</div>
 
+  <!-- Reconcile -->
+  <div class="task-row" id="row-reconcile">
+    <div class="task-name">
+      Location Reconcile
+      <div style="font-size:.72rem;font-weight:400;color:var(--muted);margin-top:1px">Verify tracked locations match disk reality; auto-correct mismatches</div>
+    </div>
+    <div class="task-sched" style="color:var(--muted);font-style:italic">On demand</div>
+    <div class="task-last"><?= $reconcile_last_ts ? fmt_rel_time($reconcile_last_ts) : '—' ?></div>
+    <div class="task-next">—</div>
+    <div class="task-status" id="reconcile-status"><span class="dot dot-muted"></span><span>Idle</span></div>
+    <div class="task-action">
+      <button class="btn-run" id="btn-reconcile" onclick="runTask('reconcile')">&#9654; Run Now</button>
+    </div>
+  </div>
+  <div class="notice-queued" id="notice-reconcile">Reconcile queued — will run in ~30s…</div>
+
 </div><!-- .card -->
 
 <!-- ── Task History ── -->
@@ -305,10 +335,12 @@ function runTask(type) {
   if (btn) { btn.disabled = true; btn.textContent = type === 'mover' ? 'Queued…' : 'Running…'; btn.classList.add('running'); }
   if (notice) notice.style.display = 'block';
 
-  // Mover: just trigger, no polling (separate container handles it)
-  if (type === 'mover') {
+  // Mover / reconcile: just trigger, no polling (separate container handles it)
+  if (type === 'mover' || type === 'reconcile') {
+    var action = type === 'mover' ? 'run_mover' : 'run_reconcile';
+    var delay  = type === 'mover' ? 5000 : 35000;
     var form = new FormData();
-    form.append('action', 'run_mover');
+    form.append('action', action);
     fetch('tasks.php', { method: 'POST', body: form })
       .then(function(r) { return r.json(); })
       .catch(function() {})
@@ -316,7 +348,8 @@ function runTask(type) {
         setTimeout(function() {
           if (btn)    { btn.disabled = false; btn.textContent = '▶ Run Now'; btn.classList.remove('running'); }
           if (notice) notice.style.display = 'none';
-        }, 5000);
+          if (type === 'reconcile') location.reload();
+        }, delay);
       });
     return;
   }

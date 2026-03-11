@@ -3,6 +3,19 @@ require_once __DIR__ . '/includes/settings.php';
 require_once __DIR__ . '/includes/layout.php';
 require_once __DIR__ . '/includes/db.php';
 
+// ── POST: cancel a pending move ───────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cancel_pending') {
+    $pm_id = (int)($_POST['pm_id'] ?? 0);
+    if ($pm_id) {
+        try {
+            $db = db_connect();
+            $db->prepare("DELETE FROM pending_moves WHERE id=? AND status='pending'")
+               ->execute([$pm_id]);
+        } catch (Exception $e) {}
+    }
+    header('Location: queue.php'); exit;
+}
+
 // ── queue.json ────────────────────────────────────────────────────────────────
 $qf   = queue_file();
 $data = null;
@@ -93,6 +106,7 @@ layout_start('Queue', 'queue', $extra_head);
         <th>Mapping</th>
         <th>Status</th>
         <th>Queued / Started</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -132,6 +146,14 @@ layout_start('Queue', 'queue', $extra_head);
         <td style="color:var(--muted);font-size:.8rem"><?= htmlspecialchars($mapname) ?></td>
         <td><span class="badge badge-muted">Pending</span></td>
         <td style="font-size:.75rem;color:var(--muted)"><?= date('Y-m-d H:i', $pm['requested_at']) ?></td>
+        <td>
+          <form method="POST" action="queue.php" style="display:inline"
+                onsubmit="return confirm('Cancel this queued move?')">
+            <input type="hidden" name="action" value="cancel_pending">
+            <input type="hidden" name="pm_id" value="<?= (int)$pm['id'] ?>">
+            <button type="submit" class="btn btn-danger" style="padding:.2rem .5rem;font-size:.72rem" title="Cancel move">✕ Cancel</button>
+          </form>
+        </td>
       </tr>
       <?php endforeach; ?>
 
@@ -202,6 +224,7 @@ layout_start('Queue', 'queue', $extra_head);
           <?php endif; ?>
         </td>
         <td style="font-size:.75rem;color:var(--muted)"><?= htmlspecialchars($item['started_at'] ?? '—') ?></td>
+        <td></td>
       </tr>
       <?php endforeach; ?>
 
