@@ -208,16 +208,16 @@ $extra_head = <<<'CSS'
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Column widths — % with min-width so nothing truncates */
+/* Column widths — flex-grow fills available space; actions always fixed */
 .sc-tbl-status  { flex: 0 0 24px; }
-.sc-tbl-title   { flex: 1 1 auto; min-width: 80px; max-width: 260px; }
-.sc-tbl-type    { flex: 0 0 52px; }
-.sc-tbl-loc     { flex: 0 0 52px; }
-.sc-tbl-size    { flex: 0 0 70px; }
-.sc-tbl-moved   { flex: 0 0 88px; }
-.sc-tbl-reloc   { flex: 0 0 100px; }
-.sc-tbl-source  { flex: 0 0 60px; }
-.sc-tbl-actions { flex: 0 0 245px; }
+.sc-tbl-title   { flex: 3 1 120px; min-width: 120px; }
+.sc-tbl-type    { flex: 0 0 50px; }
+.sc-tbl-loc     { flex: 0 0 50px; }
+.sc-tbl-size    { flex: 1 0 74px; }
+.sc-tbl-moved   { flex: 1 0 88px; }
+.sc-tbl-reloc   { flex: 1 0 116px; overflow: visible; }
+.sc-tbl-source  { flex: 0 0 58px; }
+.sc-tbl-actions { flex: 0 0 120px; }
 .btn-move {
   padding: .2rem .4rem; font-size: .7rem; font-weight: 600;
   border: 1px solid var(--border); border-radius: var(--radius);
@@ -252,8 +252,7 @@ $extra_head = <<<'CSS'
   .sc-toolbar { margin: -1rem -1rem 1rem; }
   .tb-search input { width: 130px; }
   .sc-tbl-reloc { display: none; }
-  .sc-tbl-actions { flex: 0 0 90px; }
-  .sc-tbl-actions input[type=date] { display: none; }
+  .sc-tbl-actions { flex: 0 0 100px; }
 }
 </style>
 CSS;
@@ -366,19 +365,19 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     </div>
     <div class="sc-tbl-cell sc-tbl-type">Type</div>
     <div class="sc-tbl-cell sc-tbl-loc sort-col" data-sort="location" onclick="doSort('location')">
-      Location <span class="th-arrow">↑</span>
+      Loc <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-size">Size</div>
     <div class="sc-tbl-cell sc-tbl-moved sort-col" data-sort="moved" onclick="doSort('moved')">
       Moved <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-reloc sort-col" data-sort="relocate" onclick="doSort('relocate')">
-      Scheduled Relocate
-      <span class="th-info" title="The date this item is scheduled to be automatically relocated between fast and slow storage. Set to a date to schedule, leave blank to pin.">ⓘ</span>
+      Relocate
+      <span class="th-info" title="Date this item will be auto-relocated. Edit inline. Pin/unpin via the 📌 button.">ⓘ</span>
       <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-source sort-col" data-sort="service" onclick="doSort('service')">
-      Service <span class="th-arrow">↑</span>
+      Svc <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-actions">Actions</div>
   </div>
@@ -450,7 +449,19 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     </div>
 
     <div class="sc-tbl-cell sc-tbl-reloc">
-      <span class="badge <?= $rl_class ?>"><?= htmlspecialchars($rl_label) ?></span>
+      <?php if ($is_pinned): ?>
+        <span style="color:var(--muted);font-size:.78rem">Pinned</span>
+      <?php else: ?>
+        <form method="POST" action="tracked.php" id="trf-<?= $row['id'] ?>" style="display:inline">
+          <input type="hidden" name="action" value="set_relocate">
+          <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
+          <input type="date" name="relocate_date"
+                 value="<?= htmlspecialchars($relocate_val) ?>"
+                 style="width:108px;font-size:.7rem;padding:.15rem .25rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:<?= $is_expired ? 'var(--red)' : 'var(--text)' ?>"
+                 onchange="this.form.submit()"
+                 title="Relocate date">
+        </form>
+      <?php endif; ?>
     </div>
 
     <div class="sc-tbl-cell sc-tbl-source">
@@ -461,7 +472,7 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     </div>
 
     <div class="sc-tbl-cell sc-tbl-actions">
-      <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:nowrap">
+      <div style="display:flex;gap:.3rem;align-items:center">
 
         <!-- Move to other location -->
         <?php if ($on_fast): ?>
@@ -483,33 +494,22 @@ layout_start('Tracked Media', 'tracked', $extra_head);
         <form method="POST" action="tracked.php" style="display:inline">
           <input type="hidden" name="action" value="unpin">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <button type="submit" class="btn" style="padding:.2rem .4rem;font-size:.75rem" title="Unpin — re-enable auto-relocation">📍</button>
+          <button type="submit" class="btn" style="padding:.2rem .35rem;font-size:.75rem" title="Unpin — re-enable auto-relocation">📍</button>
         </form>
         <?php else: ?>
         <form method="POST" action="tracked.php" style="display:inline">
           <input type="hidden" name="action" value="pin">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <button type="submit" class="btn" style="padding:.2rem .4rem;font-size:.75rem" title="Pin — prevent auto-relocation">📌</button>
+          <button type="submit" class="btn" style="padding:.2rem .35rem;font-size:.75rem" title="Pin — prevent auto-relocation">📌</button>
         </form>
         <?php endif; ?>
-
-        <!-- Relocate date -->
-        <form method="POST" action="tracked.php" style="display:inline" id="trf-<?= $row['id'] ?>">
-          <input type="hidden" name="action" value="set_relocate">
-          <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <input type="date" name="relocate_date"
-                 value="<?= htmlspecialchars($relocate_val) ?>"
-                 style="width:100px;font-size:.72rem;padding:.2rem .3rem"
-                 onchange="document.getElementById('trf-<?= $row['id'] ?>').submit()"
-                 title="Set relocate date">
-        </form>
 
         <!-- Delete -->
         <form method="POST" action="tracked.php" style="display:inline"
               onsubmit="return confirm('Remove this entry?')">
           <input type="hidden" name="action" value="delete">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <button type="submit" class="btn btn-danger" style="padding:.2rem .4rem;font-size:.75rem" title="Remove">✕</button>
+          <button type="submit" class="btn btn-danger" style="padding:.2rem .35rem;font-size:.75rem" title="Remove">✕</button>
         </form>
       </div>
     </div>
