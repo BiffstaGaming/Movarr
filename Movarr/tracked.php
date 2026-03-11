@@ -32,6 +32,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
         if ($id && $ts) { db_set_relocate($db, $id, $ts); header('Location: tracked.php?msg='.urlencode('Relocate date updated.').'&mtype=success'); }
         else { header('Location: tracked.php?msg='.urlencode('Invalid date.').'&mtype=error'); }
         exit;
+    } elseif ($action === 'move_to_fast' || $action === 'move_to_slow') {
+        $id = (int)($_POST['track_id'] ?? 0);
+        if ($id) {
+            $stmt = $db->prepare("SELECT * FROM tracked_media WHERE id=?");
+            $stmt->execute([$id]);
+            $entry = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($entry) {
+                $direction = ($action === 'move_to_fast') ? 'to_fast' : 'to_slow';
+                db_queue_move($db, (int)$entry['external_id'], $entry['service'],
+                              $entry['mapping_id'], $direction,
+                              'manual move from tracked page', $entry['title']);
+                header('Location: tracked.php?msg='.urlencode('Move queued — will run on next mover cycle.').'&mtype=success'); exit;
+            }
+        }
+        header('Location: tracked.php?msg='.urlencode('Entry not found.').'&mtype=error'); exit;
     }
 }
 
@@ -199,7 +214,19 @@ $extra_head = <<<'CSS'
 .sc-tbl-moved   { flex: 0 0 10%;  min-width: 82px; }
 .sc-tbl-reloc   { flex: 0 0 12%;  min-width: 92px; }
 .sc-tbl-source  { flex: 0 0 8%;   min-width: 60px; }
-.sc-tbl-actions { flex: 0 0 155px; }
+.sc-tbl-actions { flex: 0 0 220px; }
+.btn-move {
+  padding: .2rem .4rem; font-size: .7rem; font-weight: 600;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; white-space: nowrap; line-height: 1.4;
+  background: rgba(255,255,255,.04); color: var(--text);
+  transition: background .15s, color .15s;
+}
+.btn-move:hover { background: rgba(255,255,255,.1); }
+.btn-move.to-fast { border-color: var(--green); color: var(--green); }
+.btn-move.to-fast:hover { background: rgba(var(--green-rgb, 81,207,102),.15); }
+.btn-move.to-slow { border-color: var(--muted); color: var(--muted); }
+.btn-move.to-slow:hover { background: rgba(255,255,255,.08); color: var(--text); }
 
 /* Sortable header cells */
 .sc-tbl-header .sort-col { cursor: pointer; user-select: none; }
@@ -215,10 +242,15 @@ $extra_head = <<<'CSS'
 .legend-items { display:flex;flex-wrap:wrap;gap:.35rem 1.5rem; }
 .legend-item { display:flex;align-items:center;gap:.4rem;font-size:.75rem;color:var(--muted); }
 
+@media(max-width:900px) {
+  .sc-tbl-moved, .sc-tbl-size, .sc-tbl-source { display: none; }
+}
 @media(max-width:700px) {
   .sc-toolbar { margin: -1rem -1rem 1rem; }
   .tb-search input { width: 130px; }
-  .sc-tbl-moved, .sc-tbl-size, .sc-tbl-source { display: none; }
+  .sc-tbl-reloc { display: none; }
+  .sc-tbl-actions { flex: 0 0 90px; }
+  .sc-tbl-actions input[type=date] { display: none; }
 }
 </style>
 CSS;
@@ -426,34 +458,55 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     </div>
 
     <div class="sc-tbl-cell sc-tbl-actions">
-      <div style="display:flex;gap:.3rem;align-items:center">
+      <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:nowrap">
+
+        <!-- Move to other location -->
+        <?php if ($on_fast): ?>
+        <form method="POST" action="tracked.php" style="display:inline">
+          <input type="hidden" name="action" value="move_to_slow">
+          <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
+          <button type="submit" class="btn-move to-slow" title="Queue move to slow storage">← Slow</button>
+        </form>
+        <?php else: ?>
+        <form method="POST" action="tracked.php" style="display:inline">
+          <input type="hidden" name="action" value="move_to_fast">
+          <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
+          <button type="submit" class="btn-move to-fast" title="Queue move to fast storage">→ Fast</button>
+        </form>
+        <?php endif; ?>
+
+        <!-- Pin / Unpin (icon only) -->
         <?php if ($is_pinned): ?>
         <form method="POST" action="tracked.php" style="display:inline">
           <input type="hidden" name="action" value="unpin">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <button type="submit" class="btn" style="padding:.2rem .45rem;font-size:.7rem;color:var(--accent)" title="Unpin — re-enable auto-relocation">📍 Unpin</button>
+          <button type="submit" class="btn" style="padding:.2rem .4rem;font-size:.75rem" title="Unpin — re-enable auto-relocation">📍</button>
         </form>
         <?php else: ?>
         <form method="POST" action="tracked.php" style="display:inline">
           <input type="hidden" name="action" value="pin">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <button type="submit" class="btn" style="padding:.2rem .45rem;font-size:.7rem" title="Pin — prevent auto-relocation">📌</button>
+          <button type="submit" class="btn" style="padding:.2rem .4rem;font-size:.75rem" title="Pin — prevent auto-relocation">📌</button>
         </form>
         <?php endif; ?>
+
+        <!-- Relocate date -->
         <form method="POST" action="tracked.php" style="display:inline" id="trf-<?= $row['id'] ?>">
           <input type="hidden" name="action" value="set_relocate">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
           <input type="date" name="relocate_date"
                  value="<?= htmlspecialchars($relocate_val) ?>"
-                 style="width:108px;font-size:.72rem;padding:.2rem .35rem"
+                 style="width:100px;font-size:.72rem;padding:.2rem .3rem"
                  onchange="document.getElementById('trf-<?= $row['id'] ?>').submit()"
                  title="Set relocate date">
         </form>
+
+        <!-- Delete -->
         <form method="POST" action="tracked.php" style="display:inline"
               onsubmit="return confirm('Remove this entry?')">
           <input type="hidden" name="action" value="delete">
           <input type="hidden" name="track_id" value="<?= $row['id'] ?>">
-          <button type="submit" class="btn btn-danger" style="padding:.2rem .45rem;font-size:.7rem" title="Remove">✕</button>
+          <button type="submit" class="btn btn-danger" style="padding:.2rem .4rem;font-size:.75rem" title="Remove">✕</button>
         </form>
       </div>
     </div>
