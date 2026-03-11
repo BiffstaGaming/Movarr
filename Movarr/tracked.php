@@ -210,14 +210,14 @@ $extra_head = <<<'CSS'
 }
 /* Column widths — flex-grow fills available space; actions always fixed */
 .sc-tbl-status  { flex: 0 0 24px; }
-.sc-tbl-title   { flex: 3 1 120px; min-width: 120px; }
-.sc-tbl-type    { flex: 0 0 50px; }
-.sc-tbl-loc     { flex: 0 0 50px; }
-.sc-tbl-size    { flex: 1 0 74px; }
-.sc-tbl-moved   { flex: 1 0 88px; }
-.sc-tbl-reloc   { flex: 1 0 116px; overflow: visible; }
-.sc-tbl-source  { flex: 0 0 58px; }
-.sc-tbl-actions { flex: 0 0 120px; }
+.sc-tbl-title   { flex: 3 1 140px; min-width: 140px; }
+.sc-tbl-type    { flex: 0 0 58px; }
+.sc-tbl-loc     { flex: 0 0 78px; }
+.sc-tbl-size    { flex: 1 0 80px; }
+.sc-tbl-moved   { flex: 1 0 95px; }
+.sc-tbl-reloc   { flex: 1 0 120px; overflow: visible; }
+.sc-tbl-source  { flex: 0 0 68px; }
+.sc-tbl-actions { flex: 0 0 145px; overflow: visible; }
 .btn-move {
   padding: .2rem .4rem; font-size: .7rem; font-weight: 600;
   border: 1px solid var(--border); border-radius: var(--radius);
@@ -364,8 +364,8 @@ layout_start('Tracked Media', 'tracked', $extra_head);
       Title <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-type">Type</div>
-    <div class="sc-tbl-cell sc-tbl-loc sort-col" data-sort="location" onclick="doSort('location')">
-      Loc <span class="th-arrow">↑</span>
+    <div class="sc-tbl-cell sc-tbl-loc sort-col" data-sort="location" onclick="doSort('location')" title="Storage location (Fast / Slow)">
+      Storage <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-size">Size</div>
     <div class="sc-tbl-cell sc-tbl-moved sort-col" data-sort="moved" onclick="doSort('moved')">
