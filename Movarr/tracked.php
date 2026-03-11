@@ -43,7 +43,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
                 db_queue_move($db, (int)$entry['external_id'], $entry['service'],
                               $entry['mapping_id'], $direction,
                               'manual move from tracked page', $entry['title']);
-                header('Location: tracked.php?msg='.urlencode('Move queued — will run on next mover cycle.').'&mtype=success'); exit;
+                // Trigger manual_move.py in the mover container immediately
+                @file_put_contents(config_base() . '/.manual_trigger',
+                    date('Y-m-d H:i:s') . ' manual trigger from tracked page' . PHP_EOL);
+                header('Location: tracked.php?msg='.urlencode('Move queued — starting now.').'&mtype=success'); exit;
             }
         }
         header('Location: tracked.php?msg='.urlencode('Entry not found.').'&mtype=error'); exit;
@@ -207,14 +210,14 @@ $extra_head = <<<'CSS'
 }
 /* Column widths — % with min-width so nothing truncates */
 .sc-tbl-status  { flex: 0 0 24px; }
-.sc-tbl-title   { flex: 1 1 auto; min-width: 120px; }
-.sc-tbl-type    { flex: 0 0 7%;   min-width: 52px; }
-.sc-tbl-loc     { flex: 0 0 7%;   min-width: 52px; }
-.sc-tbl-size    { flex: 0 0 8%;   min-width: 64px; }
-.sc-tbl-moved   { flex: 0 0 10%;  min-width: 82px; }
-.sc-tbl-reloc   { flex: 0 0 12%;  min-width: 92px; }
-.sc-tbl-source  { flex: 0 0 8%;   min-width: 60px; }
-.sc-tbl-actions { flex: 0 0 220px; }
+.sc-tbl-title   { flex: 1 1 auto; min-width: 80px; max-width: 260px; }
+.sc-tbl-type    { flex: 0 0 52px; }
+.sc-tbl-loc     { flex: 0 0 52px; }
+.sc-tbl-size    { flex: 0 0 70px; }
+.sc-tbl-moved   { flex: 0 0 88px; }
+.sc-tbl-reloc   { flex: 0 0 100px; }
+.sc-tbl-source  { flex: 0 0 60px; }
+.sc-tbl-actions { flex: 0 0 245px; }
 .btn-move {
   padding: .2rem .4rem; font-size: .7rem; font-weight: 600;
   border: 1px solid var(--border); border-radius: var(--radius);

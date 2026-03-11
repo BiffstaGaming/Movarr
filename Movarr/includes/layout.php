@@ -44,7 +44,8 @@ function layout_start(string $title, string $active, string $extra_head = ''): v
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= htmlspecialchars($title) ?> — Movarr</title>
+<title>Movarr</title>
+<link rel="icon" type="image/svg+xml" href="images/movarr-logo.svg">
 <?= $extra_head ?>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
