@@ -232,13 +232,15 @@ function sync_tautulli(PDO $db, array $s): array
     }
     $cache_dirty = false;
     $now         = time();
+    $rk_titles   = []; // rk => title captured on guid_miss for title-based fallback
 
     /**
      * Resolve a plex:// rating_key to a numeric external ID.
      * Calls Tautulli get_metadata, caches successful results for 24 h.
+     * On guid_miss, stores the title in $rk_titles for title-based fallback.
      */
     $resolve_plex = function (string $rk, string $pattern) use (
-        $base, $key, &$guid_cache, &$cache_dirty, &$stats, $now
+        $base, $key, &$guid_cache, &$cache_dirty, &$stats, $now, &$rk_titles
     ): int {
         if (!$rk) return 0;
         // Use a stable prefix derived from the pattern to avoid TV/movie collisions
@@ -269,6 +271,9 @@ function sync_tautulli(PDO $db, array $s): array
                     $ptype = str_contains($pattern, 'thetvdb') ? 'tv' : 'mv';
                     sync_log("rk=$rk guid_miss type=$ptype guids=" . implode('|', array_slice($raw_guids, 0, 5)), 'WARN');
                 }
+                // Capture title for title-based fallback
+                $t = trim($meta['title'] ?? $meta['grandparent_title'] ?? '');
+                if ($t !== '') $rk_titles[$rk] = $t;
             }
         } elseif ($meta === null) {
             sync_log("rk=$rk get_metadata returned null", 'WARN');
@@ -329,10 +334,26 @@ function sync_tautulli(PDO $db, array $s): array
         $last_date  ? date('Y-m-d', $last_date)  : '—'
     ));
 
-    // Resolve show rating_keys → TVDb IDs via get_metadata
-    $resolved = 0; $unresolved = 0; $sample_fail = '';
+    // Resolve show rating_keys → TVDb IDs via get_metadata, with title fallback
+    $resolved = 0; $unresolved = 0; $title_fallback = 0; $sample_fail = '';
+    $fb_show = $db->prepare(
+        "SELECT external_id FROM media_library
+         WHERE service='sonarr' AND title_norm=? AND external_id > 0
+         LIMIT 1"
+    );
     foreach ($plex_show as $rk => $date) {
         $tid = $resolve_plex($rk, '/(?:thetvdb|tvdb):\/\/(\d+)/i');
+        // If no TVDb GUID, try matching by title against media_library
+        if ($tid === 0 && isset($rk_titles[$rk])) {
+            $norm = norm_title($rk_titles[$rk]);
+            $fb_show->execute([$norm]);
+            $row = $fb_show->fetch(PDO::FETCH_NUM);
+            if ($row && (int)$row[0] > 0) {
+                $tid = (int)$row[0];
+                $title_fallback++;
+                sync_log("rk=$rk title_fallback '{$rk_titles[$rk]}' → tvdb=$tid");
+            }
+        }
         if ($tid > 0) {
             $resolved++;
             if (!isset($show_map[$tid]) || $date > $show_map[$tid]) $show_map[$tid] = $date;
@@ -341,8 +362,8 @@ function sync_tautulli(PDO $db, array $s): array
             if (!$sample_fail) $sample_fail = $rk;
         }
     }
-    sync_log(sprintf('Show resolution: %d resolved, %d unresolved%s',
-        $resolved, $unresolved,
+    sync_log(sprintf('Show resolution: %d resolved (%d via title), %d unresolved%s',
+        $resolved, $title_fallback, $unresolved,
         $sample_fail ? " (sample unresolved rk=$sample_fail)" : ''
     ));
 
@@ -376,9 +397,11 @@ function sync_tautulli(PDO $db, array $s): array
     }
 
     // ── Movies ────────────────────────────────────────────────────────────────
-    $movie_map  = []; // tmdb_id => max timestamp
-    $plex_movie = []; // rating_key => max timestamp
-    $start      = 0;
+    $movie_map        = []; // tmdb_id => max timestamp
+    $plex_movie       = []; // rating_key => max timestamp (plex:// GUIDs needing resolution)
+    $title_movie      = []; // norm_title => max timestamp (imdb-only or no-GUID fallback)
+    $title_movie_raw  = []; // norm_title => raw title for logging
+    $start            = 0;
 
     do {
         $stats['api_calls']++;
@@ -404,16 +427,58 @@ function sync_tautulli(PDO $db, array $s): array
             } elseif (str_starts_with($guid, 'plex://')) {
                 $rk = (string)($r['rating_key'] ?? '');
                 if ($rk && (!isset($plex_movie[$rk]) || $date > $plex_movie[$rk])) $plex_movie[$rk] = $date;
+            } else {
+                // imdb-only or unknown GUID — queue for title-based fallback
+                $raw_title = trim($r['full_title'] ?? $r['title'] ?? '');
+                if ($raw_title !== '') {
+                    $norm = norm_title($raw_title);
+                    if (!isset($title_movie[$norm]) || $date > $title_movie[$norm]) {
+                        $title_movie[$norm]     = $date;
+                        $title_movie_raw[$norm] = $raw_title;
+                    }
+                }
             }
         }
         $start += $page_size;
     } while (count($records) === $page_size);
 
+    // Resolve plex:// movies via get_metadata; fallback to title on miss
+    $fb_movie = $db->prepare(
+        "SELECT external_id FROM media_library
+         WHERE service='radarr' AND title_norm=? AND external_id > 0
+         LIMIT 1"
+    );
+    $mv_title_fallback = 0;
     foreach ($plex_movie as $rk => $date) {
         $mid = $resolve_plex($rk, '/(?:themoviedb|tmdb):\/\/(\d+)/i');
+        if ($mid === 0 && isset($rk_titles[$rk])) {
+            $norm = norm_title($rk_titles[$rk]);
+            $fb_movie->execute([$norm]);
+            $row = $fb_movie->fetch(PDO::FETCH_NUM);
+            if ($row && (int)$row[0] > 0) {
+                $mid = (int)$row[0];
+                $mv_title_fallback++;
+                sync_log("rk=$rk movie_title_fallback '{$rk_titles[$rk]}' → tmdb=$mid");
+            }
+        }
         if ($mid > 0 && (!isset($movie_map[$mid]) || $date > $movie_map[$mid])) {
             $movie_map[$mid] = $date;
         }
+    }
+
+    // Title-based fallback for imdb-only movies
+    foreach ($title_movie as $norm => $date) {
+        $fb_movie->execute([$norm]);
+        $row = $fb_movie->fetch(PDO::FETCH_NUM);
+        if ($row && (int)$row[0] > 0) {
+            $mid = (int)$row[0];
+            $mv_title_fallback++;
+            sync_log("movie title_fallback '{$title_movie_raw[$norm]}' → tmdb=$mid");
+            if (!isset($movie_map[$mid]) || $date > $movie_map[$mid]) $movie_map[$mid] = $date;
+        }
+    }
+    if ($mv_title_fallback) {
+        sync_log("Movie title fallback resolved $mv_title_fallback movies");
     }
 
     if ($movie_map) {

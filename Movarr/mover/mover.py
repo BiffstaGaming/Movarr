@@ -489,6 +489,7 @@ def get_watched(settings: dict, log: logging.Logger) -> tuple:
             log.debug('  TVDB match: %r -> tvdb=%d', title, tvdb_id)
         else:
             watched_titles.add(normalize(title))
+            log.info('  Fallback title match: %r (no TVDB GUID in Plex)', title)
     log.info('  Resolved via TVDB ID : %d', len(watched_tvdb_ids))
     log.info('  Fallback title match : %d', len(watched_titles))
     return watched_tvdb_ids, watched_titles
@@ -531,6 +532,7 @@ def get_watched_movies(settings: dict, log: logging.Logger) -> tuple:
             log.debug('  TMDB match: %r -> tmdb=%d', title, tmdb_id)
         else:
             watched_titles.add(normalize(title))
+            log.info('  Fallback title match: %r (no TMDB GUID in Plex)', title)
     log.info('  Resolved via TMDB ID : %d', len(watched_tmdb_ids))
     log.info('  Fallback title match : %d', len(watched_titles))
     return watched_tmdb_ids, watched_titles
@@ -809,8 +811,10 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
             # Watched and already on fast: extend the window
             to_extend.append(series)
 
-    log.info('  -> Move to fast: %d', len(to_fast))
-    log.info('  <- Move to slow: %d', len(to_slow))
+    fast_gib = sum(s.get('statistics', {}).get('sizeOnDisk', 0) for s in to_fast) / 1024**3
+    slow_gib = sum(s.get('statistics', {}).get('sizeOnDisk', 0) for s in to_slow) / 1024**3
+    log.info('  -> Move to fast: %d  (%.2f GiB)', len(to_fast), fast_gib)
+    log.info('  <- Move to slow: %d  (%.2f GiB)', len(to_slow), slow_gib)
     log.info('  ~~ Extend window: %d', len(to_extend))
 
     # Extend relocate_after for actively-watched shows already on fast
@@ -926,8 +930,10 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
         elif on_fast and from_tautulli:
             to_extend.append(movie)
 
-    log.info('  -> Move to fast: %d', len(to_fast))
-    log.info('  <- Move to slow: %d', len(to_slow))
+    fast_gib = sum(m.get('sizeOnDisk', 0) for m in to_fast) / 1024**3
+    slow_gib = sum(m.get('sizeOnDisk', 0) for m in to_slow) / 1024**3
+    log.info('  -> Move to fast: %d  (%.2f GiB)', len(to_fast), fast_gib)
+    log.info('  <- Move to slow: %d  (%.2f GiB)', len(to_slow), slow_gib)
     log.info('  ~~ Extend window: %d', len(to_extend))
 
     if not list_only:
