@@ -21,6 +21,7 @@ COPY queue.php   /var/www/html/queue.php
 COPY manual.php  /var/www/html/manual.php
 COPY history.php /var/www/html/history.php
 COPY health.php  /var/www/html/health.php
+COPY preview.php /var/www/html/preview.php
 COPY tracked.php /var/www/html/tracked.php
 COPY tasks.php   /var/www/html/tasks.php
 COPY includes/   /var/www/html/includes/
