@@ -429,6 +429,37 @@ def normalize(title: str) -> str:
 
 # -- Tautulli ------------------------------------------------------------------
 
+def get_active_titles(settings: dict, log: logging.Logger) -> set:
+    """Return a set of normalised titles currently streaming in Plex via Tautulli.
+
+    Uses the grandparent_title for episodes (show name) and title for movies.
+    Returns an empty set if Tautulli is unconfigured or unreachable — moves
+    proceed unblocked in that case.
+    """
+    tautulli = settings.get('tautulli', {})
+    url      = tautulli.get('url', '').rstrip('/')
+    api_key  = tautulli.get('api_key', '')
+    if not url or not api_key:
+        return set()
+    try:
+        resp     = requests.get(url + '/api/v2',
+                                params={'apikey': api_key, 'cmd': 'get_activity'},
+                                timeout=10)
+        sessions = resp.json().get('response', {}).get('data', {}).get('sessions', [])
+        titles   = set()
+        for s in sessions:
+            t = (s.get('grandparent_title') if s.get('media_type') == 'episode'
+                 else s.get('title', ''))
+            if t and t.strip():
+                titles.add(normalize(t.strip()))
+        if titles:
+            log.info('Active Plex sessions: %s', ', '.join(repr(t) for t in titles))
+        return titles
+    except Exception as exc:
+        log.warning('Could not fetch Tautulli activity (skipping watch-check): %s', exc)
+        return set()
+
+
 def get_id_from_plex(rating_key: str, tautulli: dict, scheme: str,
                      log: logging.Logger) -> int | None:
     """Extract a TVDB or TMDB ID from Plex GUIDs via Tautulli get_metadata."""
@@ -838,6 +869,8 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
             queue.skip(idx, 'List Only Mode')
         return
 
+    active_titles = get_active_titles(settings, log)
+
     def do_move(series, src_base, dst_base, new_sonarr_base, location, q_idx):
         folder          = Path(series['path']).name
         src             = src_base / folder
@@ -852,6 +885,10 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
         size_bytes = folder_size_bytes(src)
         if not dry_run and not preflight_disk(dst_base, size_bytes, series['title'], log):
             queue.skip(q_idx, 'Insufficient disk space')
+            return
+        if normalize(series['title']) in active_titles:
+            log.warning('Skipping "%s" — currently being watched in Plex', series['title'])
+            queue.skip(q_idx, 'Currently being watched')
             return
         queue.start(q_idx)
         t_start = time.time()
@@ -956,6 +993,8 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
             queue.skip(idx, 'List Only Mode')
         return
 
+    active_titles = get_active_titles(settings, log)
+
     def do_move(movie, src_base, dst_base, new_radarr_base, location, q_idx):
         folder          = Path(movie['path']).name
         src             = src_base / folder
@@ -970,6 +1009,10 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
         size_bytes = folder_size_bytes(src)
         if not dry_run and not preflight_disk(dst_base, size_bytes, movie['title'], log):
             queue.skip(q_idx, 'Insufficient disk space')
+            return
+        if normalize(movie['title']) in active_titles:
+            log.warning('Skipping "%s" — currently being watched in Plex', movie['title'])
+            queue.skip(q_idx, 'Currently being watched')
             return
         queue.start(q_idx)
         t_start = time.time()

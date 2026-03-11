@@ -197,6 +197,44 @@ def db_migrate(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def normalize(title: str) -> str:
+    """Lowercase, strip trailing (YYYY), collapse whitespace."""
+    t = title.strip().lower()
+    t = re.sub(r'\s*\(\d{4}\)\s*$', '', t)
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip()
+
+
+def get_active_titles(settings: dict, log: logging.Logger) -> set:
+    """Return a set of normalised titles currently streaming in Plex via Tautulli.
+
+    Uses grandparent_title for episodes (show name) and title for movies.
+    Returns an empty set if Tautulli is unconfigured or unreachable.
+    """
+    tautulli = settings.get('tautulli', {})
+    url      = tautulli.get('url', '').rstrip('/')
+    api_key  = tautulli.get('api_key', '')
+    if not url or not api_key:
+        return set()
+    try:
+        resp     = requests.get(url + '/api/v2',
+                                params={'apikey': api_key, 'cmd': 'get_activity'},
+                                timeout=10)
+        sessions = resp.json().get('response', {}).get('data', {}).get('sessions', [])
+        titles   = set()
+        for s in sessions:
+            t = (s.get('grandparent_title') if s.get('media_type') == 'episode'
+                 else s.get('title', ''))
+            if t and t.strip():
+                titles.add(normalize(t.strip()))
+        if titles:
+            log.info('Active Plex sessions: %s', ', '.join(repr(t) for t in titles))
+        return titles
+    except Exception as exc:
+        log.warning('Could not fetch Tautulli activity (skipping watch-check): %s', exc)
+        return set()
+
+
 def folder_size_bytes(path) -> int:
     """Return total byte size of all files under path, or 0 on error."""
     total = 0
@@ -616,6 +654,8 @@ def main() -> None:
     all_series = get_sonarr_series(settings, log) if 'sonarr' in needed_services else []
     all_movies = get_radarr_movies(settings, log) if 'radarr' in needed_services else []
 
+    active_titles = get_active_titles(settings, log)
+
     now         = int(time.time())
     relocate_ts = now + (days * 86400)
 
@@ -684,6 +724,12 @@ def main() -> None:
                 db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
                 db.commit()
                 continue
+            if normalize(title) in active_titles:
+                log.warning('Skipping "%s" — currently being watched in Plex', title)
+                queue.skip(q_idx, 'Currently being watched')
+                db.execute("UPDATE pending_moves SET status='pending' WHERE id=?", (pm_id,))
+                db.commit()
+                continue
             # Mark as processing so the queue page shows the queue.json entry instead
             db.execute("UPDATE pending_moves SET status='processing' WHERE id=?", (pm_id,))
             db.commit()
@@ -749,6 +795,12 @@ def main() -> None:
             if not preflight_disk(dst.parent, size_bytes, title, log):
                 queue.skip(q_idx, 'Insufficient disk space')
                 db.execute("UPDATE pending_moves SET status='error' WHERE id=?", (pm_id,))
+                db.commit()
+                continue
+            if normalize(title) in active_titles:
+                log.warning('Skipping "%s" — currently being watched in Plex', title)
+                queue.skip(q_idx, 'Currently being watched')
+                db.execute("UPDATE pending_moves SET status='pending' WHERE id=?", (pm_id,))
                 db.commit()
                 continue
             # Mark as processing so the queue page shows the queue.json entry instead

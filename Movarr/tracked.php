@@ -212,11 +212,11 @@ $extra_head = <<<'CSS'
 .sc-tbl-status  { flex: 0 0 24px; }
 .sc-tbl-title   { flex: 3 1 140px; min-width: 140px; }
 .sc-tbl-type    { flex: 0 0 58px; }
-.sc-tbl-loc     { flex: 0 0 78px; }
+.sc-tbl-loc     { flex: 0 0 92px; }
 .sc-tbl-size    { flex: 1 0 80px; }
 .sc-tbl-moved   { flex: 1 0 95px; }
 .sc-tbl-reloc   { flex: 1 0 120px; overflow: visible; }
-.sc-tbl-source  { flex: 0 0 68px; }
+.sc-tbl-source  { flex: 0 0 82px; }
 .sc-tbl-actions { flex: 0 0 145px; overflow: visible; }
 .btn-move {
   padding: .2rem .4rem; font-size: .7rem; font-weight: 600;
@@ -377,7 +377,7 @@ layout_start('Tracked Media', 'tracked', $extra_head);
       <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-source sort-col" data-sort="service" onclick="doSort('service')">
-      Svc <span class="th-arrow">↑</span>
+      Source <span class="th-arrow">↑</span>
     </div>
     <div class="sc-tbl-cell sc-tbl-actions">Actions</div>
   </div>
