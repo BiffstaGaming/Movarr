@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY mover.py manual_move.py entrypoint.py ./
+COPY mover.py manual_move.py entrypoint.py reconcile.py preview.py ./
 
 ENV CONFIG_PATH=/config
 
