@@ -851,7 +851,7 @@ def rsync_move(src: Path, dst: Path, dry_run: bool,
                progress_cb=None) -> tuple:
     """rsync src/ into dst/, delete src on success. Returns (ok, summary)."""
     dst.mkdir(parents=True, exist_ok=True)
-    cmd = ['rsync', '-av', '--checksum', str(src) + '/', str(dst) + '/']
+    cmd = ['rsync', '-av', str(src) + '/', str(dst) + '/']
     if dry_run:
         cmd.insert(1, '--dry-run')
 
