@@ -341,13 +341,16 @@ def main() -> None:
 
     results = []
     for mapping in mappings:
-        if all_series:
+        has_sonarr_paths = bool(mapping.get('slow_path_sonarr') and mapping.get('fast_path_sonarr'))
+        has_radarr_paths = bool(mapping.get('slow_path_radarr') and mapping.get('fast_path_radarr'))
+
+        if all_series and has_sonarr_paths:
             try:
                 results.append(preview_mapping_sonarr(
                     mapping, tautulli_tvdb_ids, watched_titles, all_series, days, db, log))
             except Exception as exc:
                 log.error("Error previewing sonarr mapping '%s': %s", mapping.get('name'), exc, exc_info=True)
-        if all_movies:
+        if all_movies and has_radarr_paths:
             try:
                 results.append(preview_mapping_radarr(
                     mapping, tautulli_tmdb_ids, watched_movie_titles, all_movies, days, db, log))
