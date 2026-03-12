@@ -232,8 +232,8 @@ def preview_mapping_radarr(mapping: dict, watched_tmdb_ids: set, watched_titles:
                             db: sqlite3.Connection, log: logging.Logger) -> dict:
     name        = mapping.get('name', 'unnamed')
     mapping_id  = mapping.get('id', name)
-    slow_radarr = mapping['slow_path_sonarr'].rstrip('/')
-    fast_radarr = mapping['fast_path_sonarr'].rstrip('/')
+    slow_radarr = mapping['slow_path_radarr'].rstrip('/')
+    fast_radarr = mapping['fast_path_radarr'].rstrip('/')
     slow_mover  = Path(mapping['slow_path_mover'])
     fast_mover  = Path(mapping['fast_path_mover'])
 
@@ -310,15 +310,16 @@ def main() -> None:
     days     = int(settings.get('watched_days', 30))
     mappings = settings.get('path_mappings', [])
 
-    needs_sonarr = any(m.get('service') == 'sonarr' for m in mappings)
-    needs_radarr = any(m.get('service') == 'radarr' for m in mappings)
+    sonarr = settings.get('sonarr', {})
+    radarr = settings.get('radarr', {})
+    has_sonarr = bool(sonarr.get('url') and sonarr.get('api_key'))
+    has_radarr = bool(radarr.get('url') and radarr.get('api_key'))
 
     all_series, all_movies = [], []
     tautulli_tvdb_ids, watched_titles       = set(), set()
     tautulli_tmdb_ids, watched_movie_titles = set(), set()
 
-    if needs_sonarr:
-        sonarr = settings.get('sonarr', {})
+    if has_sonarr:
         try:
             resp = requests.get(sonarr['url'].rstrip('/') + '/api/v3/series',
                                 headers={'X-Api-Key': sonarr['api_key']}, timeout=30)
@@ -328,30 +329,30 @@ def main() -> None:
             log.error('Sonarr fetch failed: %s', exc)
         tautulli_tvdb_ids, watched_titles = get_watched(settings, log)
 
-    if needs_radarr:
-        radarr = settings.get('radarr', {})
-        if radarr.get('url') and radarr.get('api_key'):
-            try:
-                resp = requests.get(radarr['url'].rstrip('/') + '/api/v3/movie',
-                                    headers={'X-Api-Key': radarr['api_key']}, timeout=30)
-                all_movies = resp.json()
-                log.info('Radarr: %d movies', len(all_movies))
-            except Exception as exc:
-                log.error('Radarr fetch failed: %s', exc)
+    if has_radarr:
+        try:
+            resp = requests.get(radarr['url'].rstrip('/') + '/api/v3/movie',
+                                headers={'X-Api-Key': radarr['api_key']}, timeout=30)
+            all_movies = resp.json()
+            log.info('Radarr: %d movies', len(all_movies))
+        except Exception as exc:
+            log.error('Radarr fetch failed: %s', exc)
         tautulli_tmdb_ids, watched_movie_titles = get_watched_movies(settings, log)
 
     results = []
     for mapping in mappings:
-        service = mapping.get('service', 'sonarr')
-        try:
-            if service == 'sonarr' and all_series:
+        if all_series:
+            try:
                 results.append(preview_mapping_sonarr(
                     mapping, tautulli_tvdb_ids, watched_titles, all_series, days, db, log))
-            elif service == 'radarr':
+            except Exception as exc:
+                log.error("Error previewing sonarr mapping '%s': %s", mapping.get('name'), exc, exc_info=True)
+        if all_movies:
+            try:
                 results.append(preview_mapping_radarr(
                     mapping, tautulli_tmdb_ids, watched_movie_titles, all_movies, days, db, log))
-        except Exception as exc:
-            log.error("Error previewing mapping '%s': %s", mapping.get('name'), exc, exc_info=True)
+            except Exception as exc:
+                log.error("Error previewing radarr mapping '%s': %s", mapping.get('name'), exc, exc_info=True)
 
     output = {
         'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
