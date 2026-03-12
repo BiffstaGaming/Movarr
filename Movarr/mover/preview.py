@@ -190,6 +190,11 @@ def preview_mapping_sonarr(mapping: dict, watched_tvdb_ids: set, watched_titles:
         "AND (relocate_after IS NULL OR relocate_after > ?)",
         (mapping_id, now))}
 
+    pinned_on_slow_tvdb = {row['external_id'] for row in db.execute(
+        "SELECT external_id FROM tracked_media "
+        "WHERE service='sonarr' AND mapping_id=? AND current_location='slow' "
+        "AND relocate_after IS NULL", (mapping_id,))}
+
     all_watched = watched_tvdb_ids | pinned_tvdb
 
     to_fast, to_slow, to_extend = [], [], []
@@ -207,6 +212,9 @@ def preview_mapping_sonarr(mapping: dict, watched_tvdb_ids: set, watched_titles:
                  'size_human': _fmt_bytes(size)}
 
         if on_slow and active:
+            if tvdb_id and tvdb_id in pinned_on_slow_tvdb:
+                log.debug('Preview: skipping "%s" — pinned on slow storage', series['title'])
+                continue
             src = slow_mover / folder
             entry['src_path'] = str(src)
             entry['disk_ok']  = src.exists()
@@ -249,6 +257,11 @@ def preview_mapping_radarr(mapping: dict, watched_tmdb_ids: set, watched_titles:
         "AND (relocate_after IS NULL OR relocate_after > ?)",
         (mapping_id, now))}
 
+    pinned_on_slow_tmdb = {row['external_id'] for row in db.execute(
+        "SELECT external_id FROM tracked_media "
+        "WHERE service='radarr' AND mapping_id=? AND current_location='slow' "
+        "AND relocate_after IS NULL", (mapping_id,))}
+
     all_watched = watched_tmdb_ids | pinned_tmdb
 
     to_fast, to_slow, to_extend = [], [], []
@@ -266,6 +279,9 @@ def preview_mapping_radarr(mapping: dict, watched_tmdb_ids: set, watched_titles:
                  'size_human': _fmt_bytes(size)}
 
         if on_slow and active:
+            if tmdb_id and tmdb_id in pinned_on_slow_tmdb:
+                log.debug('Preview: skipping "%s" — pinned on slow storage', movie['title'])
+                continue
             src = slow_mover / folder
             entry['src_path'] = str(src)
             entry['disk_ok']  = src.exists()

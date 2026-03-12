@@ -927,6 +927,15 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
                 or s['path'].startswith(fast_sonarr + '/')]
     log.info('  %d Sonarr series in this mapping\'s paths', len(relevant))
 
+    # Items tracked+pinned while on slow storage are never promoted to fast
+    pinned_on_slow_tvdb = {row['external_id'] for row in db.execute(
+        "SELECT external_id FROM tracked_media "
+        "WHERE service='sonarr' AND mapping_id=? AND current_location='slow' "
+        "AND relocate_after IS NULL", (mapping_id,))}
+    if pinned_on_slow_tvdb:
+        log.info('  %d Sonarr series pinned on slow (will not move to fast)',
+                 len(pinned_on_slow_tvdb))
+
     to_fast, to_slow, to_extend = [], [], []
     for series in relevant:
         path      = series['path'].rstrip('/')
@@ -941,6 +950,10 @@ def process_mapping(mapping: dict, watched_tvdb_ids: set, tautulli_tvdb_ids: set
                         (normalize(folder) in watched_titles)
 
         if on_slow and is_active:
+            if tvdb_id and tvdb_id in pinned_on_slow_tvdb:
+                log.info('  Skipping "%s" — pinned on slow storage (will not promote to fast)',
+                         series['title'])
+                continue
             to_fast.append(series)
         elif on_fast and not is_active:
             to_slow.append(series)
@@ -1083,6 +1096,15 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
                 or m['path'].startswith(fast_radarr + '/')]
     log.info('  %d Radarr movies in this mapping\'s paths', len(relevant))
 
+    # Items tracked+pinned while on slow storage are never promoted to fast
+    pinned_on_slow_tmdb = {row['external_id'] for row in db.execute(
+        "SELECT external_id FROM tracked_media "
+        "WHERE service='radarr' AND mapping_id=? AND current_location='slow' "
+        "AND relocate_after IS NULL", (mapping_id,))}
+    if pinned_on_slow_tmdb:
+        log.info('  %d Radarr movies pinned on slow (will not move to fast)',
+                 len(pinned_on_slow_tmdb))
+
     to_fast, to_slow, to_extend = [], [], []
     for movie in relevant:
         path      = movie['path'].rstrip('/')
@@ -1096,6 +1118,10 @@ def process_mapping_radarr(mapping: dict, watched_tmdb_ids: set, tautulli_tmdb_i
                         (normalize(folder) in watched_titles)
 
         if on_slow and is_active:
+            if tmdb_id and tmdb_id in pinned_on_slow_tmdb:
+                log.info('  Skipping "%s" — pinned on slow storage (will not promote to fast)',
+                         movie['title'])
+                continue
             to_fast.append(movie)
         elif on_fast and not is_active:
             to_slow.append(movie)
