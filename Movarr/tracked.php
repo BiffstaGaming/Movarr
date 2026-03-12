@@ -347,6 +347,9 @@ layout_start('Tracked Media', 'tracked', $extra_head);
         <button class="sc-menu-item" data-sort="service"  onclick="setSort('service',this)">
           Service <span class="mi-check">✓</span>
         </button>
+        <button class="sc-menu-item" data-sort="size"     onclick="setSort('size',this)">
+          Size <span class="mi-check">✓</span>
+        </button>
       </div>
     </div>
 
@@ -425,7 +428,9 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     <div class="sc-tbl-cell sc-tbl-loc sort-col" data-sort="location" onclick="doSort('location')" title="Storage location (Fast / Slow)">
       Storage <span class="th-arrow">↑</span>
     </div>
-    <div class="sc-tbl-cell sc-tbl-size">Size</div>
+    <div class="sc-tbl-cell sc-tbl-size sort-col" data-sort="size" onclick="doSort('size')">
+      Size <span class="th-arrow">↑</span>
+    </div>
     <div class="sc-tbl-cell sc-tbl-moved sort-col" data-sort="moved" onclick="doSort('moved')">
       Moved <span class="th-arrow">↑</span>
     </div>
@@ -469,7 +474,8 @@ layout_start('Tracked Media', 'tracked', $extra_head);
     data-moved="<?= (int)$row['moved_at'] ?>"
     data-relocate="<?= (int)($row['relocate_after'] ?? 0) ?>"
     data-pinned="<?= $is_pinned ? '1' : '0' ?>"
-    data-expired="<?= $is_expired ? '1' : '0' ?>">
+    data-expired="<?= $is_expired ? '1' : '0' ?>"
+    data-size="<?= (int)($row['size_on_disk'] ?? 0) ?>">
 
     <div class="sc-tbl-cell sc-tbl-check">
       <input type="checkbox" class="row-check" value="<?= $row['id'] ?>" onchange="updateBulkBar()">

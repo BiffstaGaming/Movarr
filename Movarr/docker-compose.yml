@@ -8,6 +8,7 @@
       - config_data:/config
     environment:
       CONFIG_PATH: /config
+      TZ: ${TZ:-UTC}
       # Fallback env vars used only if settings.json doesn't exist yet.
       # Once you save settings via the Config page these are ignored.
       TAUTULLI_URL: ${TAUTULLI_URL:-http://vm-plex.home:8181}
@@ -34,6 +35,7 @@
       - /mnt/metadata-nvme/torrents:/torrentDownloads
     environment:
       CONFIG_PATH: /config
+      TZ: ${TZ:-UTC}
     healthcheck:
       test: ["CMD", "python3", "-c", "import os, sys; f='/config/.write_test'; open(f,'w').close(); os.remove(f)"]
       interval: 30s

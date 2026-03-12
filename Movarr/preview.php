@@ -19,6 +19,15 @@ if (file_exists($pf)) {
 }
 
 $has_data   = $data !== null;
+
+function fmt_preview_bytes(int $bytes): string {
+    if ($bytes <= 0) return '0 B';
+    if ($bytes >= 1_099_511_627_776) return number_format($bytes / 1_099_511_627_776, 2) . ' TB';
+    if ($bytes >= 1_073_741_824)     return number_format($bytes / 1_073_741_824, 2) . ' GB';
+    if ($bytes >= 1_048_576)         return number_format($bytes / 1_048_576, 1) . ' MB';
+    return $bytes . ' B';
+}
+
 $extra_head = '';
 layout_start('Move Preview', 'preview', $extra_head);
 ?>
@@ -120,9 +129,12 @@ layout_start('Move Preview', 'preview', $extra_head);
     </span>
   </div>
 
-  <?php if (!empty($to_fast)): ?>
+  <?php if (!empty($to_fast)):
+    $fast_bytes = array_sum(array_column($to_fast, 'size_bytes'));
+  ?>
   <div class="preview-direction-header">
     <span style="color:var(--green)">&#8594;</span> Move to Fast (<?= count($to_fast) ?>)
+    <span style="margin-left:auto;font-weight:400;color:var(--green);opacity:.8"><?= htmlspecialchars(fmt_preview_bytes($fast_bytes)) ?></span>
   </div>
   <?php foreach ($to_fast as $item): ?>
   <div class="preview-item">
@@ -138,9 +150,12 @@ layout_start('Move Preview', 'preview', $extra_head);
   <?php endforeach; ?>
   <?php endif; ?>
 
-  <?php if (!empty($to_slow)): ?>
+  <?php if (!empty($to_slow)):
+    $slow_bytes = array_sum(array_column($to_slow, 'size_bytes'));
+  ?>
   <div class="preview-direction-header">
     <span style="color:var(--muted)">&#8592;</span> Move to Slow (<?= count($to_slow) ?>)
+    <span style="margin-left:auto;font-weight:400;color:var(--muted)"><?= htmlspecialchars(fmt_preview_bytes($slow_bytes)) ?></span>
   </div>
   <?php foreach ($to_slow as $item): ?>
   <div class="preview-item">
